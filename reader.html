@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>论文阅读器 · Paper Reader</title>
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <!-- ===== Top toolbar ===== -->
+  <header class="topbar">
+    <button id="btn-library" class="tb-btn" title="论文库">☰ 论文库</button>
+    <div class="app-title">📖 论文阅读器</div>
+
+    <div class="seg" id="view-seg" role="tablist" aria-label="视图模式">
+      <button class="seg-btn active" data-mode="both">双栏</button>
+      <button class="seg-btn" data-mode="translation">翻译</button>
+      <button class="seg-btn" data-mode="original">原文</button>
+    </div>
+
+    <div class="font-ctl" title="字体大小（单栏/双栏均可）">
+      <span class="font-ico">Aa</span>
+      <input id="font-scale" type="range" min="100" max="250" step="10" value="100">
+      <span id="font-val" class="font-val">100%</span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <button id="btn-anno" class="tb-btn off" title="开启/关闭标注模式">🖊 标注：关</button>
+    <button id="btn-sync" class="tb-btn off" title="开启/关闭双栏滚动同步">🔗 同步：关</button>
+    <button id="btn-shot" class="tb-btn" title="框选区域截图并悬浮">📸 截图</button>
+    <button id="btn-notes" class="tb-btn" title="笔记列表">📝 笔记</button>
+  </header>
+
+  <div class="layout">
+    <!-- ===== Sidebar: paper library ===== -->
+    <aside id="library" class="library">
+      <div class="library-head">论文库</div>
+      <div id="paper-list" class="paper-list"><div class="hint">加载中…</div></div>
+    </aside>
+
+    <!-- ===== Viewer ===== -->
+    <main id="viewer" class="viewer">
+      <section id="pane-translation" class="pane pane-translation">
+        <div class="pane-head">中文翻译</div>
+        <iframe id="trans-frame" class="trans-frame" title="中文翻译" sandbox="allow-same-origin"></iframe>
+      </section>
+      <div id="splitter" class="splitter" title="拖动调整宽度"></div>
+      <section id="pane-pdf" class="pane pane-pdf">
+        <div class="pane-head">原文 PDF</div>
+        <div id="pdf-scroll" class="pdf-scroll">
+          <div id="pdf-canvas-wrap" class="pdf-canvas-wrap"></div>
+          <div id="pdf-status" class="pdf-status">未选择论文</div>
+        </div>
+      </section>
+
+      <div id="empty-state" class="empty-state">
+        <div class="empty-card">
+          <h2>欢迎使用论文阅读器</h2>
+          <p>从左侧 <b>论文库</b> 选择一篇论文开始阅读。</p>
+          <ul>
+            <li>🖊 <b>标注模式</b>开启后，在<b>中文翻译</b>或 <b>PDF 原文</b>中选中文字即可<b>高亮 / 做笔记</b>（原文侧为按页矩形高亮）。标注保存在论文文件夹的 <code>.anno.json</code>，<b>不改动</b>原 HTML / PDF。</li>
+            <li>📸 <b>截图悬浮</b>：点「截图」后在阅读区拖拽框选任意区域，松手即把该区域浮在屏幕上，方便左右对照原文图与翻译。</li>
+            <li>🔠 <b>字体滑块</b>：放大翻译或原文文字，单栏 / 双栏都生效。</li>
+            <li>双栏 / 翻译 / 原文 三种视图可随时切换。</li>
+          </ul>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- ===== Notes drawer ===== -->
+  <aside id="notes-drawer" class="notes-drawer">
+    <div class="notes-head">笔记 <button id="btn-notes-close" class="x">×</button></div>
+    <div id="notes-list" class="notes-list"><div class="hint">暂无笔记</div></div>
+  </aside>
+
+  <!-- ===== Floating screenshot layer ===== -->
+  <div id="float-layer" class="float-layer"></div>
+
+  <!-- ===== Region-select screenshot overlay ===== -->
+  <div id="shot-overlay" class="shot-overlay hidden">
+    <div id="shot-sel" class="shot-sel"></div>
+    <div class="shot-tip">拖拽框选要截取的区域 · 松手即悬浮 · 按 Esc 取消</div>
+  </div>
+
+  <!-- ===== Annotation popup (selection toolbar) ===== -->
+  <div id="anno-popup" class="anno-popup hidden">
+    <span class="swatch" data-color="yellow" style="background:#ffd54a"></span>
+    <span class="swatch" data-color="green" style="background:#7CFFB2"></span>
+    <span class="swatch" data-color="blue" style="background:#7ec8ff"></span>
+    <span class="swatch" data-color="pink" style="background:#ff9ecb"></span>
+    <button id="anno-note" class="anno-note-btn">📝 笔记</button>
+    <button id="anno-cancel" class="anno-cancel-btn">✕</button>
+  </div>
+
+  <!-- ===== Note editor ===== -->
+  <div id="note-editor" class="note-editor hidden">
+    <div class="ne-head">笔记</div>
+    <textarea id="note-text" class="ne-text" placeholder="写下你的笔记…"></textarea>
+    <div class="ne-actions">
+      <button id="ne-save" class="ne-save">保存</button>
+      <button id="ne-cancel" class="ne-cancel">取消</button>
+      <button id="ne-delete" class="ne-delete">删除标注</button>
+    </div>
+  </div>
+
+  <script src="/static/vendor/pdf.min.js"></script>
+  <script src="/static/vendor/html2canvas.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>
