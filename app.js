@@ -5,7 +5,7 @@
  * ========================================================================= */
 "use strict";
 
-const ANNO_SEL = "p, .fig-caption, h2, h3, li"; // annotatable blocks in translation HTML
+const ANNO_SEL = "p, div, section, article, h1, h2, h3, h4, h5, h6, li, td, th, blockquote, pre, figure, figcaption, .fig-caption"; // annotatable blocks in translation HTML
 const HL_COLORS = {
   yellow: "rgba(255,213,74,.45)",
   green: "rgba(124,255,178,.45)",
@@ -408,6 +408,10 @@ function injectAnnoStyles() {
 function markBlocks() {
   const blocks = iframeDoc.querySelectorAll(ANNO_SEL);
   blocks.forEach((b, i) => b.setAttribute("data-bidx", String(i)));
+  // Also tag the body as a fallback block so annotations on unmatched elements survive reload
+  if (!iframeDoc.body.hasAttribute("data-bidx")) {
+    iframeDoc.body.setAttribute("data-bidx", String(blocks.length));
+  }
 }
 
 function blockOf(node) {
@@ -416,7 +420,9 @@ function blockOf(node) {
     if (el.matches && el.matches(ANNO_SEL)) return el;
     el = el.parentElement;
   }
-  return null;
+  // Fallback: allow annotating any text even if it's not inside a "known" block
+  // (e.g. text inside <span>, <a>, <em>, or bare text nodes in a <div>-heavy layout)
+  return iframeDoc.body;
 }
 
 function offsetInBlock(block, container, off) {
