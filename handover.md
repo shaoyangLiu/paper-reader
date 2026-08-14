@@ -7,7 +7,7 @@
 
 ## 1. 项目概览
 
-一个**本地论文阅读器**，配合 WorkBuddy 生成的中文翻译 HTML 使用。核心诉求：读论文时先看法文翻译，再对照原文 PDF，并能在翻译/原文上做标注、截图悬浮对照。
+一个**本地论文阅读器**，配合 WorkBuddy 生成的中文翻译 HTML 使用。核心诉求：读论文时先看中文翻译，再对照原文 PDF，并能在翻译/原文上做标注、截图悬浮对照。
 
 **技术选型（已与用户确认）**：原生 HTML/CSS/JS 前端 + Python 标准库 `http.server` 本地服务器 + 内置 PDF.js。无构建步骤、无 pip 依赖。
 
@@ -122,6 +122,39 @@ C:\Users\z3450390\OneDrive - UNSW\Desktop\OneDrive Sync\Literature\
   - 选择存入 `localStorage`（`pr_transBg`/`pr_transFg`），刷新页面保留；复位恢复默认 `#14141c / #e6e6e6`。
   - 仅作用于翻译 iframe，不影响 PDF 原文与浮窗。
 
+### 3.13 §3.13 阅读位置书签 (2026-08-14, commit 17222a6)
+- **新功能**：🔖 按钮打开书签抽屉，保存**当前视图模式 + 字体缩放 + 双栏左右滚动位置 + 备注**。
+- 数据写入同一 `<翻译名>.anno.json`（新增 `bookmarks` 数组，与 `annotations` 并列）；`/api/annotations` POST 改为同时保存 `{ annotations, bookmarks }`，用临时文件 + `rename` 原子写避免半截。
+- 跨会话持久：`openPaper` 载入时读 `bookmarks` 并渲染；点击书签 → `applyBookmark()` 恢复视图/缩放/滚动。
+- 列表可删除单条。
+
+### 3.14 §3.14 标注范围修复：更多选区可标注 (2026-08-14, commit a4148e9)
+- **根因**：`ANNO_SEL` 只含 `p, .fig-caption, h2, h3, li` 等少数选择器，选中作者/机构等 `div/section/h1/h4` 文本时弹不出标注选项。
+- **修复**：`ANNO_SEL` 扩充到 18 个选择器（加 `div/section/article/h1/h4-h6/td/th/blockquote/pre/figure/figcaption`）；`blockOf()` 兜底返回 `iframeDoc.body` 并设置 `data-bidx`，确保任何选中都有标注入口。
+
+### 3.15 §3.15 截图放大坐标修复（决定性根因）(2026-08-14, commit 0950ea2 → c135720)
+- **用户现象**：100% 框选正常，放大（160%/200%）后裁剪区域错位（截到标题 / 不是框选内容）；翻译窗口放大同样错位。
+- **决定性根因**：`vendor/html2canvas.min.js` 是 **1.4.1**，整份源码 `zoom` 出现 **0 次**——html2canvas **完全忽略 CSS `zoom`**，永远按「未缩放逻辑布局 × scale」渲染。`.trans-frame` 经核对 `border:none`，无边框偏移。
+- **前 5 次失败的共同错误**：用 `scrollLeft`（单位随 zoom 变化）把"屏幕坐标"和"文档坐标"在**不同缩放空间**相加/折算，导致 z>100% 整体偏移。
+- **最终修复**（`captureIframeRegion` 重写）：完全不碰 zoom、不依赖 `scrollLeft`。
+  - `iframeDoc.body.getBoundingClientRect()` 取 body 在屏幕上的**真实**位置（已含 zoom）；
+  - 屏幕选区角点 → 逻辑坐标：`(selX − bodyLeft) / z`（`z` = 字体滑块值）；
+  - 裁剪：`逻辑坐标 × 2`（`scale=2`）。数学上与「zoom=1 直接 html2canvas 该元素」的 ground truth 完全等价。
+- 附带 `zoom-crop-test.html` 自验台：拉 Zoom 到 200% 点 Run test，看 `pixel match ratio`（>90% 即 PASS）。
+
+### 3.16 §3.16 浮窗透明度改为真透明 (2026-08-14, commit 11c85e0)
+- **用户现象**：图片下方滑块看着像"明暗度"调整，拉低只是变暗。
+- **根因**：滑块代码早已绑定 `img.style.opacity`（并无 brightness 代码），让人误判的是 `.float-img` 的 `background:#000`——透明度调低时露出**黑色浮窗底板**，所以像变暗而非看穿页面。
+- **修复**：`.float-img` 背景 `#000` → `transparent`。现在滑块是**真正透明度**，图片变透明时透出下方页面，可左右对照原文/翻译。滑块下限仍为 20%（避免浮窗彻底消失）。
+
+### 3.17 §3.17 浮窗八向缩放 (2026-08-14, commit 4898b2c)
+- **用户需求**：原来只有右下角一个缩放手柄，要四边 + 四角都能缩放。
+- **改动**（`addFloatImage`）：
+  - 删除单一 `.fi-resize` 手柄，改为 8 个 `.fi-h` 手柄（`n/s/e/w/ne/nw/se/sw`），带 `data-dir`，平时隐藏、hover 浮窗时显示高亮。
+  - 新增通用 `startResize(dir, e)`：`n/w/ne/nw/sw` 这些**移动原点**的手柄会重算对边锚点（对面保持不动，不会反向拉伸）；最小尺寸仍 120×80 自动停住。
+  - `.float-img` 加 `box-sizing: border-box`，保证 CSS 宽高与缩放计算完全一致（否则边框累积 4px 偏移）。
+- **服务器自愈补充**（同日）：发现旧进程卡在 8731 端口返回空响应（wedged PID），`reset-reader.bat` / `start-reader.bat` 已加固——先 `Get-NetTCPConnection -LocalPort 8731` 精确杀占用进程 → 重启 python → `curl` 健康检查（需 HTTP 200）→ 再开浏览器。
+
 ---
 
 ## 4. 关键设计决策
@@ -136,10 +169,10 @@ C:\Users\z3450390\OneDrive - UNSW\Desktop\OneDrive Sync\Literature\
 
 ## 5. 已知限制
 
-- ⚠️ **翻译 iframe 区域框选为空**：`html2canvas` 不渲染 iframe 内部内容。框选 PDF 原文（canvas）正常；框选翻译栏会得到空白。如需"框选翻译文字"，需单独对 `iframe.contentDocument.body` 做截图补充。
+- ✅ **翻译 iframe 区域截图**：已支持（`captureIframeRegion` 对 iframe 文档单独渲染）；框选跨双栏会分别截取再合成。见 §3.12、§3.15。
 - ⚠️ **PDF 标注依赖文本层**：扫描版/图片型 PDF 无文本层，无法选词高亮（只能截图标注重）。
 - ⚠️ **滚动同步非逐句**：见 §4.4。
-- ⚠️ **字体放大时截 PDF**：`zoom` 放大后截 PDF 可能因缩放略有偏差（不影响阅读）。
+- ✅ **字体放大后截图**：已修复。html2canvas 1.4.1 忽略 CSS `zoom`，新版用 `getBoundingClientRect` + `÷缩放倍数` + `×2` 精确裁剪，放大到 250% 也准确。见 §3.15。
 
 ---
 
@@ -194,7 +227,10 @@ C:\Users\z3450390\OneDrive - UNSW\Desktop\OneDrive Sync\Literature\
 
 ## 7. 待办 / 可扩展（用户可能要的下一步）
 
-- [ ] 支持「框选翻译区域」截图（html2canvas 对 iframe 内文档单独渲染）。
+- [x] 支持「框选翻译区域」截图（iframe 单独渲染 + 放大坐标修正，见 §3.12 / §3.15）。
+- [x] 浮窗八向缩放（四角+四边，见 §3.17）。
+- [x] 浮窗透明度真透明（见 §3.16）。
+- [x] 阅读位置书签（见 §3.13）。
 - [ ] 「一键截整页 PDF / 整页翻译」快捷键/按钮（框选的便捷替代）。
 - [ ] 标注导出（如导出全部高亮+笔记为 Markdown/HTML 报告）。
 - [ ] 多论文标注汇总检索。
