@@ -844,28 +844,30 @@ async function captureRegion(selX, selY, selW, selH) {
   overlay.classList.add("hidden"); // hide mask before capture
 
   try {
-    const paneTransRect = paneTrans.getBoundingClientRect();
-    const panePdfRect = pdfScroll.getBoundingClientRect();
-    const selRight = selX + selW;
-    const selBottom = selY + selH;
+    const transVisible = !paneTrans.classList.contains("hidden");
+    const pdfVisible = !panePdf.classList.contains("hidden");
+    const iframeRect = iframe.getBoundingClientRect(); // iframe viewport (excludes the 30px pane head)
+    const pdfRect = pdfScroll.getBoundingClientRect();
 
-    // Determine which pane(s) the selection overlaps
-    const hitsTrans = !(selX > paneTransRect.right || selRight < paneTransRect.left ||
-                         selY > paneTransRect.bottom || selBottom < paneTransRect.top);
-    const hitsPdf   = !(selX > panePdfRect.right || selRight < panePdfRect.left ||
-                         selY > panePdfRect.bottom || selBottom < panePdfRect.top);
+    let finalCanvas = null;
 
-    let finalCanvas;
-
-    if (hitsTrans && !hitsPdf) {
-      // === Selection is ONLY on translation (iframe) side ===
-      finalCanvas = await captureIframeRegion(paneTransRect, selX, selY, selW, selH);
-    } else if (hitsPdf && !hitsTrans) {
-      // === Selection is ONLY on PDF side ===
-      finalCanvas = await capturePdfRegion(panePdfRect, selX, selY, selW, selH);
-    } else {
-      // === Spans both panes — composite ===
-      finalCanvas = await captureCompositeRegion(paneTransRect, panePdfRect, selX, selY, selW, selH);
+    if (transVisible && !pdfVisible) {
+      // === Only the translation pane is shown (standalone translation view) ===
+      finalCanvas = await captureIframeRegion(iframeRect, selX, selY, selW, selH);
+    } else if (pdfVisible && !transVisible) {
+      // === Only the PDF pane is shown ===
+      finalCanvas = await capturePdfRegion(pdfRect, selX, selY, selW, selH);
+    } else if (transVisible && pdfVisible) {
+      // === Both panes shown — route by which one(s) the selection overlaps ===
+      const selRight = selX + selW, selBottom = selY + selH;
+      const hitT = !(selX > iframeRect.right || selRight < iframeRect.left ||
+                     selY > iframeRect.bottom || selBottom < iframeRect.top);
+      const hitP = !(selX > pdfRect.right || selRight < pdfRect.left ||
+                     selY > pdfRect.bottom || selBottom < pdfRect.top);
+      if (hitT && hitP) finalCanvas = await captureCompositeRegion(iframeRect, pdfRect, selX, selY, selW, selH);
+      else if (hitT) finalCanvas = await captureIframeRegion(iframeRect, selX, selY, selW, selH);
+      else if (hitP) finalCanvas = await capturePdfRegion(pdfRect, selX, selY, selW, selH);
+      else return; // selection outside both panes → nothing to capture
     }
 
     if (!finalCanvas) return;
@@ -877,29 +879,42 @@ async function captureRegion(selX, selY, selW, selH) {
   }
 }
 
-/* ---- Capture translation iframe region (fixes blank iframe issue) ---- */
+/* ---- Capture translation iframe region (zoom-aware; fixes blank / offset) ---- */
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
-  // Capture the iframe's document body using html2canvas with the iframe's window
+  // Capture the iframe's document body. html2canvas renders at scale S of the
+  // *natural* (un-zoomed) layout, so the output is naturalWidth * S pixels.
+  const S = 2; // html2canvas scale (retina)
+  const z = state.fontScale || 1; // CSS zoom applied to the iframe (font slider)
   const bodyCanvas = await html2canvas(iframeDoc.body, {
     backgroundColor: null,
-    scale: 2,
+    scale: S,
     logging: false,
     useCORS: true,
     window: iframe.contentWindow,
   });
+  if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  // Map screen selection coords → iframe-relative coords
-  const scaleX = bodyCanvas.width / iframeDoc.body.scrollWidth;
-  const scaleY = bodyCanvas.height / iframeDoc.body.scrollHeight;
-  const relX = Math.max(0, (selX - paneRect.left) + iframeDoc.documentElement.scrollLeft);
-  const relY = Math.max(0, (selY - paneRect.top) + iframeDoc.documentElement.scrollTop);
-  const cx = relX * scaleX;
-  const cy = relY * scaleY;
-  const cw = Math.min(bodyCanvas.width - cx, selW * scaleX);
-  const ch = Math.min(bodyCanvas.height - cy, selH * scaleY);
+  const scrollLeft = iframeDoc.documentElement.scrollLeft || 0;
+  const scrollTop = iframeDoc.documentElement.scrollTop || 0;
 
+  // Screen selection (which is already zoom-scaled) → natural content pixels:
+  //   naturalX = (screenX - paneLeft) / z  +  scrollLeft
+  // then → canvas pixels via * S.
+  const natX = (selX - paneRect.left) / z + scrollLeft;
+  const natY = (selY - paneRect.top) / z + scrollTop;
+  const natW = selW / z;
+  const natH = selH / z;
+
+  let cx = natX * S, cy = natY * S;
+  let cw = natW * S, ch = natH * S;
+
+  // Clamp to the captured canvas (also handles selections that start off-canvas)
+  if (cx < 0) { cw += cx; cx = 0; }
+  if (cy < 0) { ch += cy; cy = 0; }
+  if (cx + cw > bodyCanvas.width) cw = bodyCanvas.width - cx;
+  if (cy + ch > bodyCanvas.height) ch = bodyCanvas.height - cy;
   if (cw <= 0 || ch <= 0) return null;
 
   const cropped = document.createElement("canvas");
@@ -908,50 +923,54 @@ async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   return cropped;
 }
 
-/* ---- Capture PDF region: use PDF.js canvases directly (no html2canvas) ---- */
+/* ---- Capture PDF region: read PDF.js canvases directly (zoom-aware) ---- */
 async function capturePdfRegion(paneRect, selX, selY, selW, selH) {
-  const SCALE = 2; // retina
-  const outW = Math.round(selW * SCALE);
-  const outH = Math.round(selH * SCALE);
+  const S = 2; // retina output
+  const z = state.fontScale || 1; // CSS zoom applied to the PDF wrap
+  const outW = Math.round(selW * S);
+  const outH = Math.round(selH * S);
   if (outW <= 0 || outH <= 0) return null;
 
   const out = document.createElement("canvas");
   out.width = outW;
   out.height = outH;
   const ctx = out.getContext("2d");
-  // Fill with white background (PDF pages are typically white)
-  ctx.fillStyle = "#ffffff";
+  ctx.fillStyle = "#ffffff"; // PDF pages are white
   ctx.fillRect(0, 0, outW, outH);
 
-  // Find which PDF pages intersect the selection rectangle
-  const pages = pdfScroll.querySelectorAll(".pdf-page");
   const selRight = selX + selW;
   const selBottom = selY + selH;
+  const pages = pdfScroll.querySelectorAll(".pdf-page");
 
   for (const pageWrap of pages) {
-    const pRect = pageWrap.getBoundingClientRect();
-    // Check intersection with selection
-    if (selX > pRect.right || selRight < pRect.left ||
-        selY > pRect.bottom || selBottom < pRect.top) continue;
+    const pRect = pageWrap.getBoundingClientRect(); // zoomed screen rect
+    const overlapL = Math.max(selX, pRect.left);
+    const overlapR = Math.min(selRight, pRect.right);
+    const overlapT = Math.max(selY, pRect.top);
+    const overlapB = Math.min(selBottom, pRect.bottom);
+    if (overlapR <= overlapL || overlapB <= overlapT) continue;
 
-    // Get the actual rendered canvas inside this page wrapper
     const pageCanvas = pageWrap.querySelector("canvas");
     if (!pageCanvas) continue;
 
-    // Calculate where this page's visible area maps onto the output canvas
-    const srcX = Math.max(0, selX - pRect.left);       // left edge of selection relative to page
-    const srcY = Math.max(0, selY - pRect.top);         // top edge of selection relative to page
-    const srcW = Math.min(pageCanvas.width, pRect.width - srcX, selRight - pRect.left);
-    const srcH = Math.min(pageCanvas.height, pRect.height - srcY, selBottom - pRect.top);
+    // Screen overlap → natural canvas pixels (divide out the zoom)
+    let srcX = (overlapL - pRect.left) / z;
+    let srcY = (overlapT - pRect.top) / z;
+    let srcW = (overlapR - overlapL) / z;
+    let srcH = (overlapB - overlapT) / z;
 
-    const dstX = Math.max(0, (pRect.left - selX) * SCALE);
-    const dstY = Math.max(0, (pRect.top - selY) * SCALE);
+    if (srcX < 0) { srcW += srcX; srcX = 0; }
+    if (srcY < 0) { srcH += srcY; srcY = 0; }
+    if (srcX + srcW > pageCanvas.width) srcW = pageCanvas.width - srcX;
+    if (srcY + srcH > pageCanvas.height) srcH = pageCanvas.height - srcY;
+    if (srcW <= 0 || srcH <= 0) continue;
 
-    ctx.drawImage(
-      pageCanvas,
-      srcX, srcY, srcW, srcH,           // source rect on the PDF page canvas
-      dstX, dstY, srcW * SCALE, srcH * SCALE  // dest rect on output canvas
-    );
+    // Destination is positioned in the (screen * S) output canvas
+    const dstX = (overlapL - selX) * S;
+    const dstY = (overlapT - selY) * S;
+    const dstW = (overlapR - overlapL) * S;
+    const dstH = (overlapB - overlapT) * S;
+    ctx.drawImage(pageCanvas, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
   }
 
   return out;
