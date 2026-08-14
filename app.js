@@ -1006,17 +1006,23 @@ async function captureRegion(selX, selY, selW, selH) {
   }
 }
 
-/* ---- Capture translation iframe region (zoom-aware; fixes blank / offset) ---- */
+/* ---- Capture translation iframe region (zoom-independent mapping) ---- */
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
-  const z = state.fontScale || 1; // CSS zoom applied to the iframe (font slider)
-
-  // html2canvas lays out elements via getBoundingClientRect(), which ALREADY
-  // includes the CSS `zoom`. So the rendered canvas is in the *zoomed* pixel
-  // space, NOT the un-zoomed `scale` space. We therefore derive the true
-  // px-per-natural-content ratio empirically from the actual canvas rather
-  // than assuming it equals `scale`. This keeps the crop exact at any zoom.
+  // html2canvas's handling of CSS `zoom` is version-dependent: it may or may
+  // not bake the zoom into the output pixels. We must NOT assume a fixed
+  // ratio. Instead we derive the mapping from the ACTUAL rendered canvas.
+  //
+  // Everything below is in the iframe's own CSS-pixel space, which already
+  // includes the zoom (z). In particular:
+  //   - the on-screen selection (selX - paneRect.left) is in *zoomed* px
+  //   - iframeDoc.body.scrollWidth / scrollHeight are in *zoomed* px
+  //   - documentElement.scrollLeft / scrollTop are in *zoomed* px
+  // The ratio `canvas.width / body.scrollWidth` therefore equals canvas px
+  // per zoomed content px, and the zoom factor cancels algebraically for BOTH
+  // html2canvas behaviors — so the crop is exact at any zoom (and is identical
+  // to the old code at z = 1, where it already worked).
   const bodyCanvas = await html2canvas(iframeDoc.body, {
     backgroundColor: null,
     scale: 2,
@@ -1026,22 +1032,22 @@ async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   });
   if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  const natW = iframeDoc.body.scrollWidth || bodyCanvas.width / 2;
-  const natH = iframeDoc.body.scrollHeight || bodyCanvas.height / 2;
-  const rx = bodyCanvas.width / natW; // canvas px per natural px (≈ z*2 when zoomed)
-  const ry = bodyCanvas.height / natH;
+  const rx = bodyCanvas.width / (iframeDoc.body.scrollWidth  || bodyCanvas.width  / 2);
+  const ry = bodyCanvas.height / (iframeDoc.body.scrollHeight || bodyCanvas.height / 2);
 
   const scrollLeft = iframeDoc.documentElement.scrollLeft || iframeDoc.body.scrollLeft || 0;
   const scrollTop  = iframeDoc.documentElement.scrollTop  || iframeDoc.body.scrollTop  || 0;
 
-  // Screen selection (already zoom-scaled) → natural content px, then → canvas px.
-  const natX = (selX - paneRect.left) / z + scrollLeft;
-  const natY = (selY - paneRect.top) / z + scrollTop;
-  const natWsel = selW / z;
-  const natHsel = selH / z;
+  // Screen selection (zoomed px) → canvas px. No `/z` here: scrollLeft, the
+  // selection offset and body.scrollWidth are ALL already in the same zoomed
+  // space, and the ratio carries the rest.
+  const vx = selX - paneRect.left;  // x within iframe viewport (zoomed)
+  const vy = selY - paneRect.top;   // y within iframe viewport (zoomed)
 
-  let cx = natX * rx, cy = natY * ry;
-  let cw = natWsel * rx, ch = natHsel * ry;
+  let cx = (scrollLeft + vx) * rx;
+  let cy = (scrollTop + vy) * ry;
+  let cw = selW * rx;
+  let ch = selH * ry;
 
   // Clamp to the captured canvas (also handles selections that start off-canvas)
   if (cx < 0) { cw += cx; cx = 0; }
@@ -1120,9 +1126,12 @@ async function captureCompositeRegion(transRect, pdfRect, selX, selY, selW, selH
     try {
       const tCanvas = await captureIframeRegion(transRect, selX, selY, selW, selH);
       if (tCanvas) {
+        // Stretch the (already-cropped) translation region to the composite's
+        // 2x slot so it aligns with the PDF region regardless of html2canvas's
+        // zoom behavior (its output scale may be 2 or z*2).
         const tx = Math.max(0, (transRect.left - selX) * 2);
         const ty = Math.max(0, (transRect.top - selY) * 2);
-        ctx.drawImage(tCanvas, tx, ty);
+        ctx.drawImage(tCanvas, 0, 0, tCanvas.width, tCanvas.height, tx, ty, selW * 2, selH * 2);
       }
     } catch (_) {}
   }
