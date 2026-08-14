@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Zoom Crop Verification</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 20px; }
+  #test-frame { width: 560px; height: 420px; border: 2px solid #888; }
+  .panes { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 16px; }
+  .pane { border: 1px solid #ccc; padding: 8px; }
+  .pane h3 { margin: 0 0 6px; font-size: 14px; }
+  canvas { border: 1px dashed #39f; background: #fff; max-width: 100%; }
+  #result { white-space: pre-wrap; font-family: monospace; background: #f5f5f5; padding: 10px; margin-top: 12px; }
+  .ok { color: #157f3a; } .bad { color: #c0392b; }
+  button { font-size: 14px; padding: 6px 14px; }
+</style>
+<script src="vendor/html2canvas.min.js"></script>
+</head>
+<body>
+  <h2>Zoom Crop Verification Harness</h2>
+  <label>Zoom: <input id="zoom" type="range" min="100" max="250" step="10" value="200"> <span id="zoomval">200%</span></label>
+  <button id="run">Run test (select TARGET paragraph)</button>
+  <div class="panes">
+    <div class="pane"><h3>Translation iframe (zoom applied)</h3><iframe id="test-frame" srcdoc=""></iframe></div>
+    <div class="pane"><h3>Captured crop (from selection)</h3><canvas id="out" width="10" height="10"></canvas></div>
+    <div class="pane"><h3>Ground truth (zoom=100% element)</h3><canvas id="exp" width="10" height="10"></canvas></div>
+  </div>
+  <div id="result">Click "Run test".</div>
+
+<script>
+const SRC = `<!DOCTYPE html><html><head><style>
+  body{font-family:serif;font-size:16px;line-height:1.5;margin:24px;color:#111;max-width:520px}
+  h2{font-size:22px;margin:0 0 8px}
+  p{margin:0 0 14px}
+  .marker{background:#fff3b0}
+</style></head><body>
+  <h2>Alpha Section Heading</h2>
+  <p>First paragraph about renewable energy and grid storage capacity planning.</p>
+  <p>Second paragraph describing the baseline methodology and dataset collection.</p>
+  <p id="tgt">TARGET_MARKER_WORD Third paragraph with the unique phrase we intend to capture precisely under high zoom.</p>
+  <p>Fourth paragraph discussing limitations and future work directions.</p>
+  <p>Fifth paragraph concluding the results and suggesting policy implications.</p>
+</body></html>`;
+
+const frame = document.getElementById("test-frame");
+const fdoc = frame.contentDocument;
+fdoc.open(); fdoc.write(SRC); fdoc.close();
+const root = fdoc.documentElement;
+
+function setZoom(pct){ root.style.zoom = (pct/100); document.getElementById("zoomval").textContent = pct+"%"; }
+
+document.getElementById("zoom").addEventListener("input", e => setZoom(+e.target.value));
+setZoom(200);
+
+// ---- exact logic mirrored from app.js captureIframeRegion ----
+async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
+  const body = fdoc.body;
+  const z = parseFloat(root.style.zoom) || 1;
+  const S = 2;
+  const bodyRect = body.getBoundingClientRect();
+  const bodyLeftParent = paneRect.left + bodyRect.left;
+  const bodyTopParent  = paneRect.top  + bodyRect.top;
+  const toLogical = (cx,cy)=>({ x:(cx-bodyLeftParent)/z, y:(cy-bodyTopParent)/z });
+  const tl = toLogical(selX, selY), br = toLogical(selX+selW, selY+selH);
+  const bodyCanvas = await html2canvas(body, { backgroundColor:"#ffffff", scale:S, logging:false, useCORS:true });
+  if (!bodyCanvas.width || !bodyCanvas.height) return null;
+  let cx=Math.round(tl.x*S), cy=Math.round(tl.y*S), cw=Math.round((br.x-tl.x)*S), ch=Math.round((br.y-tl.y)*S);
+  if (cx<0){cw+=cx;cx=0;} if (cy<0){ch+=cy;cy=0;}
+  if (cx+cw>bodyCanvas.width) cw=bodyCanvas.width-cx;
+  if (cy+ch>bodyCanvas.height) ch=bodyCanvas.height-cy;
+  if (cw<=0||ch<=0) return null;
+  const cropped=document.createElement("canvas"); cropped.width=cw; cropped.height=ch;
+  cropped.getContext("2d").drawImage(bodyCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+  return cropped;
+}
+
+function diff(a, b){
+  if (a.width!==b.width || a.height!==b.height) return { match:false, w:a.width, h:a.height, reason:"size mismatch" };
+  const da=a.getContext("2d").getImageData(0,0,a.width,a.height).data;
+  const db=b.getContext("2d").getImageData(0,0,b.width,b.height).data;
+  let same=0, tot=da.length/4;
+  for (let i=0;i<da.length;i+=4){
+    if (Math.abs(da[i]-db[i])<30 && Math.abs(da[i+1]-db[i+1])<30 && Math.abs(da[i+2]-db[i+2])<30) same++;
+  }
+  const ratio = same/tot;
+  return { match: ratio>0.9, w:a.width, h:a.height, ratio };
+}
+
+document.getElementById("run").addEventListener("click", async () => {
+  const out = document.getElementById("out"), exp = document.getElementById("exp");
+  const resEl = document.getElementById("result");
+  const zoomPct = +document.getElementById("zoom").value;
+  setZoom(zoomPct);
+
+  // 1) Define the "user selection" as the TARGET paragraph's on-screen box (parent coords).
+  const tgt = fdoc.getElementById("tgt");
+  const tRect = tgt.getBoundingClientRect();          // iframe-viewport coords (zoomed)
+  const fRect = frame.getBoundingClientRect();        // parent coords
+  const selX = fRect.left + tRect.left + 4;
+  const selY = fRect.top  + tRect.top  + 4;
+  const selW = tRect.width  - 8;
+  const selH = tRect.height - 8;
+
+  // 2) Crop via the new logic.
+  const crop = await captureIframeRegion(fRect, selX, selY, selW, selH);
+  if (!crop){ resEl.innerHTML = '<span class="bad">FAILED: crop null</span>'; return; }
+  out.width=crop.width; out.height=crop.height; out.getContext("2d").drawImage(crop,0,0);
+
+  // 3) Ground truth: temporarily zoom=1, html2canvas the element directly.
+  const oldZoom = root.style.zoom;
+  root.style.zoom = 1;
+  const gt = await html2canvas(tgt, { backgroundColor:"#ffffff", scale:2, logging:false });
+  root.style.zoom = oldZoom;
+  exp.width=gt.width; exp.height=gt.height; exp.getContext("2d").drawImage(gt,0,0);
+
+  // 4) Compare.
+  const d = diff(crop, gt);
+  const text = `Zoom=${zoomPct}%  crop=${crop.width}x${crop.height}  truth=${gt.width}x${gt.height}\n`+
+               `pixel match ratio=${(d.ratio*100).toFixed(1)}%  -> `+
+               (d.match ? '<span class="ok">PASS (correct region)</span>' : '<span class="bad">FAIL (wrong region)</span>');
+  resEl.innerHTML = text;
+});
+</script>
+</body>
+</html>
