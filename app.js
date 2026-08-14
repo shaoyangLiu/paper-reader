@@ -1179,12 +1179,6 @@ function addFloatImage(url, x, y, w, h) {
   op.title = "透明度";
   op.addEventListener("input", () => { img.style.opacity = op.value / 100; });
 
-  // Dedicated resize handle (bottom-right) — implemented in JS so it doesn't
-  // collide with the drag handler or the opacity slider.
-  const resizeHandle = document.createElement("div");
-  resizeHandle.className = "fi-resize";
-  resizeHandle.title = "拖动调整大小";
-
   // Save: download as PNG
   bar.querySelector(".fi-save").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -1197,12 +1191,23 @@ function addFloatImage(url, x, y, w, h) {
   box.appendChild(img);
   box.appendChild(bar);
   box.appendChild(op);
-  box.appendChild(resizeHandle);
   floatLayer.appendChild(box);
 
-  // Drag from anywhere on the box (except buttons / controls / resize handle)
+  // 8 resize handles (4 corners + 4 edges). Each carries its direction in
+  // data-dir. The drag handler below skips any mousedown on a .fi-h element.
+  const DIRS = ["n", "s", "e", "w", "ne", "nw", "se", "sw"];
+  DIRS.forEach((dir) => {
+    const h = document.createElement("div");
+    h.className = "fi-h " + dir;
+    h.dataset.dir = dir;
+    h.title = "拖动调整大小";
+    box.appendChild(h);
+    h.addEventListener("mousedown", (e) => startResize(dir, e));
+  });
+
+  // Drag from anywhere on the box (except buttons / controls / resize handles)
   box.addEventListener("mousedown", (e) => {
-    if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.classList.contains("fi-resize")) return;
+    if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.classList.contains("fi-h")) return;
     if (box._resizing) return;
     e.preventDefault();
     const sx = e.clientX, sy = e.clientY;
@@ -1213,18 +1218,29 @@ function addFloatImage(url, x, y, w, h) {
     window.addEventListener("mouseup", up);
   });
 
-  // Resize from the bottom-right handle (pointer capture => works even if the
-  // cursor outruns the small handle; grows AND shrinks from the corner).
-  resizeHandle.addEventListener("mousedown", (e) => {
+  // Generic resize: works from any of the 8 handles, grows and shrinks,
+  // keeps box within min width/height, and recomputes the moving origin for
+  // the n / w / ne / nw / sw handles so the opposite edge stays anchored.
+  function startResize(dir, e) {
     e.preventDefault();
     e.stopPropagation();
     box._resizing = true;
-    try { resizeHandle.setPointerCapture(e.pointerId); } catch (_) {}
+    try { e.target.setPointerCapture(e.pointerId); } catch (_) {}
     const sx = e.clientX, sy = e.clientY;
-    const ow = box.offsetWidth, oh = box.offsetHeight;
+    const startL = box.offsetLeft, startT = box.offsetTop;
+    const startW = box.offsetWidth, startH = box.offsetHeight;
+    const minW = 120, minH = 80;
     const mv = (ev) => {
-      box.style.width = Math.max(120, ow + (ev.clientX - sx)) + "px";
-      box.style.height = Math.max(80, oh + (ev.clientY - sy)) + "px";
+      const dx = ev.clientX - sx, dy = ev.clientY - sy;
+      let L = startL, T = startT, W = startW, H = startH;
+      if (dir.includes("e")) W = Math.max(minW, startW + dx);
+      if (dir.includes("s")) H = Math.max(minH, startH + dy);
+      if (dir.includes("w")) { W = Math.max(minW, startW - dx); L = startL + (startW - W); }
+      if (dir.includes("n")) { H = Math.max(minH, startH - dy); T = startT + (startH - H); }
+      box.style.left = L + "px";
+      box.style.top = T + "px";
+      box.style.width = W + "px";
+      box.style.height = H + "px";
     };
     const up = () => {
       box._resizing = false;
@@ -1233,7 +1249,7 @@ function addFloatImage(url, x, y, w, h) {
     };
     window.addEventListener("mousemove", mv);
     window.addEventListener("mouseup", up);
-  });
+  }
 
   bar.querySelector(".fi-close").addEventListener("click", () => box.remove());
 }

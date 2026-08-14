@@ -191,7 +191,7 @@ body {
 .float-img {
   position: absolute; pointer-events: auto; border: 2px solid var(--accent);
   border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.6); background: transparent;
-  overflow: hidden; min-width: 120px; min-height: 80px;
+  overflow: hidden; min-width: 120px; min-height: 80px; box-sizing: border-box;
 }
 .float-img img { width: 100%; height: 100%; display: block; object-fit: contain; opacity: 1; }
 .float-img .fi-bar {
@@ -205,9 +205,21 @@ body {
 .float-img .fi-op { position: absolute; bottom: 6px; left: 6px; width: 70px; opacity: 0; transition: opacity .15s; pointer-events: auto; }
 .float-img:hover .fi-op { opacity: 1; }
 .float-img img { pointer-events: none; } /* let mousedown on image propagate to box for dragging */
-.float-img .fi-resize { position: absolute; right: 0; bottom: 0; width: 22px; height: 22px;
-  cursor: nwse-resize; z-index: 4; pointer-events: auto; touch-action: none;
-  background: linear-gradient(135deg, transparent 45%, rgba(255,255,255,.6) 45%, rgba(255,255,255,.6) 55%, transparent 55%, transparent 70%, rgba(255,255,255,.6) 70%, rgba(255,255,255,.6) 80%, transparent 80%);
+
+/* 8 resize handles: 4 corners + 4 edges. Reveal on hover so they don't clutter. */
+.float-img .fi-h { position: absolute; z-index: 5; pointer-events: auto; touch-action: none; }
+.float-img .fi-h.n  { top: 0; left: 16px; right: 16px; height: 8px; cursor: ns-resize; }
+.float-img .fi-h.s  { bottom: 0; left: 16px; right: 16px; height: 8px; cursor: ns-resize; }
+.float-img .fi-h.e  { right: 0; top: 16px; bottom: 16px; width: 8px; cursor: ew-resize; }
+.float-img .fi-h.w  { left: 0; top: 16px; bottom: 16px; width: 8px; cursor: ew-resize; }
+.float-img .fi-h.nw { top: 0; left: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+.float-img .fi-h.ne { top: 0; right: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+.float-img .fi-h.sw { bottom: 0; left: 0; width: 16px; height: 16px; cursor: nesw-resize; }
+.float-img .fi-h.se { bottom: 0; right: 0; width: 16px; height: 16px; cursor: nwse-resize; }
+.float-img:hover .fi-h { background: rgba(255,255,255,.28); }
+.float-img .fi-h.nw, .float-img .fi-h.ne, .float-img .fi-h.sw, .float-img .fi-h.se {
+  border-radius: 3px;
+  background: linear-gradient(135deg, transparent 45%, rgba(255,255,255,.7) 45%, rgba(255,255,255,.7) 55%, transparent 55%, transparent 70%, rgba(255,255,255,.7) 70%, rgba(255,255,255,.7) 80%, transparent 80%);
 }
 
 /* ---- Region-select screenshot overlay ---- */
