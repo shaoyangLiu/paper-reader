@@ -147,6 +147,28 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(list_papers(), ensure_ascii=False))
             return
 
+        if path == "/api/set-folder" and self.command == "POST":
+            data = self._json()
+            folder_name = data.get("folder_name", "").strip()
+            if not folder_name:
+                self._send(400, json.dumps({"error": "missing folder_name"}))
+                return
+            # Search for the folder as a sibling of current LIT_ROOT (same parent directory)
+            global LIT_ROOT
+            parent = os.path.dirname(LIT_ROOT)
+            candidate = os.path.join(parent, folder_name)
+            if os.path.isdir(candidate):
+                LIT_ROOT = candidate
+                self._send(200, json.dumps({"ok": True, "path": LIT_ROOT}, ensure_ascii=False))
+            else:
+                # Also try as direct absolute path (in case user typed one)
+                if os.path.isdir(folder_name):
+                    LIT_ROOT = folder_name
+                    self._send(200, json.dumps({"ok": True, "path": LIT_ROOT}, ensure_ascii=False))
+                else:
+                    self._send(404, json.dumps({"error": f"folder not found: {folder_name} (looked in {parent})"}, ensure_ascii=False))
+            return
+
         if path == "/api/paper":
             folder = qs.get("folder", [""])[0]
             file = qs.get("file", [""])[0]

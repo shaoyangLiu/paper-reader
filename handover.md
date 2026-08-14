@@ -107,6 +107,21 @@ C:\Users\z3450390\OneDrive - UNSW\Desktop\OneDrive Sync\Literature\
 - **保存按钮**：浮窗顶部栏新增 `💾`，点击 `link.download = screenshot_时间戳.png` 下载到浏览器默认下载目录。
 - **任意位置拖拽**：拖拽监听从 `bar.mousedown` 移到 `box.mousedown`（排除 BUTTON/INPUT）；图片 `img` 设 `pointer-events: none` 让 mousedown 穿透到外层容器 → 点图片任意位置都能拖。
 
+### 3.9 修复：浮窗不能调整大小
+- **根因**：§3.8 把拖拽监听移到 `box.mousedown` 后，会**拦截掉浮窗右下角的原生 resize 手柄**（原生 `resize: both` 的手柄也在 box 内），导致点右下角变成了拖动而非缩放；且透明度滑条（`.fi-op`）位于右下角，与 resize 手柄重叠进一步挡住。
+- **解决**：
+  - 移除 CSS `resize: both`，改为在 `addFloatImage` 里新增专用 `.fi-resize` 手柄（右下角，带斜纹视觉提示），用 JS 实现缩放（限制最小 120×80）。
+  - 拖拽监听排除 `.fi-resize`（手柄 `mousedown` 调 `stopPropagation` 防止触发拖动）。
+  - 透明度滑条 `.fi-op` 从 `right` 改到 `left`，避免与右下角 resize 手柄重叠。
+
+### 3.10 修复：浮窗只能缩小不能变大 + 新增翻译配色功能
+- **浮窗放大修复**：根因是 §3.8 之前把拖拽监听移到 `box.mousedown` 后，右下角原生 resize 手柄被拦截；且当时透明度滑条位于右下角，挡住手柄 → 拖右下角放大时实际点到滑条(INPUT)被忽略，只有往内拖(未被挡)能缩小。§3.9 已把滑条移到左下角，本次进一步：① 把手柄从 16px 放大到 22px（`z-index:4; pointer-events:auto`）；② resize 监听改用 `setPointerCapture` + `box._resizing` 标志，确保拖出手柄范围也能持续缩放、且缩放时不会误触发拖动。现在右下角手柄可双向拖拽缩放（min 120×80）。
+- **翻译界面配色（新功能）**：顶栏新增 🎨背景色 / 🔤文字色 取色器 + ↺复位。
+  - `applyTransTheme()` 向翻译 iframe 注入 `<style id="reader-trans-theme">`：`html,body{background}` + `body,body*{color}`，用 `!important` 覆盖翻译 HTML 自带暗色主题。
+  - 在 `iframe` 的 `load` 事件中调用，故换论文/重载后自动重应用。
+  - 选择存入 `localStorage`（`pr_transBg`/`pr_transFg`），刷新页面保留；复位恢复默认 `#14141c / #e6e6e6`。
+  - 仅作用于翻译 iframe，不影响 PDF 原文与浮窗。
+
 ---
 
 ## 4. 关键设计决策
@@ -140,6 +155,40 @@ C:\Users\z3450390\OneDrive - UNSW\Desktop\OneDrive Sync\Literature\
 | 加新论文 | 直接放进 Literature 对应子文件夹，刷新页面即出现 |
 
 服务器地址：**http://localhost:8731/**
+
+---
+
+## 6.5 §3.11 配色修复 + 取色器标签 + 文件夹选择器 (2026-08-14)
+
+### 修复：翻译配色不生效
+- **根因**：翻译 HTML 使用 CSS 变量（`--bg: #1a1a2e`, `--card-bg: #16213e`），多个内部元素（`.paper-header` / `.container` / `.fig-caption` 等）各有独立背景色。原 `applyTransTheme()` 只设了 `html, body { background }`，未覆盖这些元素。
+- **修复**：改为 `body *, *::before, *::after { background-color: ${bg} !important; color: ${fg} !important }` 全量覆盖；排除 `img/canvas/svg/iframe/video` 保持透明；边框色随文字色变淡。
+
+### 改进：取色器加文字标签
+- 原来只有 emoji 图标（🎨 / 🔤），用户无法区分哪个是背景、哪个是文字。
+- 现在每个取色器前加 `<span class="tb-color-label">背景</span>` / `文字` 标签；复位按钮加「复位」二字；外层用 `.tb-color-group` 包裹。
+
+### 新功能：文件夹选择器
+- **位置**：侧栏「论文库」标题右侧，📂 选文件夹按钮。
+- **流程**：点击 → `<input webkitdirectory>` 弹文件夹选择器 → 用户选目录 → 提取文件夹名 → POST `/api/set-folder` → 服务器在当前 LIT_ROOT 的**同级目录**查找该文件夹 → 找到则切换全局 LIT_ROOT → 前端重载论文列表 → 路径显示在侧栏 `#folder-path`。
+- **持久化**：路径存 localStorage (`pr_litFolder`)，刷新页面后自动恢复显示。
+- **服务端**：`server.py` 新增 `/api/set-folder` POST 端点，修改全局 `LIT_ROOT` 变量。
+- **限制**：只能选 LIT_ROOT 同级目录下的子文件夹（浏览器安全限制无法获取完整绝对路径）。
+
+---
+
+## 6.6 §3.12 截图修复：iframe 内容捕获 + 浮窗位置/大小跟随 (2026-08-14)
+
+### 问题
+1. **翻译栏（iframe）截图空白**：`html2canvas(viewer)` 无法渲染 `<iframe>` 内部内容，截取左栏翻译时浮窗显示全白。
+2. **浮窗位置/大小固定**：`addFloatImage()` 硬编码 `left:60px; top:80px; width:320px; height:220px`，不跟随框选区域。
+
+### 修复
+1. **按面板分路截图**：`captureRegion()` 检测框选区域落在哪个面板：
+   - 仅在翻译栏 → `captureIframeRegion()`：用 `html2canvas(iframeDoc.body, { window: iframe.contentWindow })` 单独渲染 iframe 文档内容，再裁剪框选部分。
+   - 仅在 PDF 栏 → `capturePdfRegion()`：原逻辑不变（PDF canvas 本身可被 html2canvas 渲染）。
+   - 跨两栏 → `captureCompositeRegion()`：分别截取两部分再合成到同一 canvas。
+2. **浮窗位置/大小跟随**：`addFloatImage(url, x, y, w, h)` 接受框选坐标和尺寸，浮窗初始位置=框选位置、初始大小=框选大小。
 
 ---
 

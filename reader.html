@@ -30,12 +30,22 @@
     <button id="btn-sync" class="tb-btn off" title="开启/关闭双栏滚动同步">🔗 同步：关</button>
     <button id="btn-shot" class="tb-btn" title="框选区域截图并悬浮">📸 截图</button>
     <button id="btn-notes" class="tb-btn" title="笔记列表">📝 笔记</button>
+    <div class="tb-sep"></div>
+    <div class="tb-color-group">
+      <label class="tb-color" title="翻译界面背景色"><span class="tb-color-label">背景</span>🎨<input id="trans-bg" type="color" value="#14141c"></label>
+      <label class="tb-color" title="翻译界面文字色"><span class="tb-color-label">文字</span>🔤<input id="trans-fg" type="color" value="#e6e6e6"></label>
+      <button id="btn-theme-reset" class="tb-btn" title="恢复默认配色">↺ 复位</button>
+    </div>
   </header>
 
   <div class="layout">
     <!-- ===== Sidebar: paper library ===== -->
     <aside id="library" class="library">
-      <div class="library-head">论文库</div>
+      <div class="library-head">
+        <span>论文库</span>
+        <button id="btn-pick-folder" class="tb-btn tb-btn-sm" title="选择论文文件夹">📂 选文件夹</button>
+      </div>
+      <div id="folder-path" class="folder-path"></div>
       <div id="paper-list" class="paper-list"><div class="hint">加载中…</div></div>
     </aside>
 
@@ -83,6 +93,9 @@
     <div id="shot-sel" class="shot-sel"></div>
     <div class="shot-tip">拖拽框选要截取的区域 · 松手即悬浮 · 按 Esc 取消</div>
   </div>
+
+  <!-- ===== Hidden folder picker (webkitdirectory) ===== -->
+  <input id="folder-picker" type="file" webkitdirectory style="display:none">
 
   <!-- ===== Annotation popup (selection toolbar) ===== -->
   <div id="anno-popup" class="anno-popup hidden">

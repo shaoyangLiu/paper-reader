@@ -58,6 +58,17 @@ body {
 
 .font-ctl { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
 .font-ctl .font-ico { font-weight: 700; color: var(--accent); }
+
+.tb-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.tb-color { display: inline-flex; align-items: center; gap: 2px; cursor: pointer; font-size: 14px; line-height: 1; }
+.tb-color-group { display: inline-flex; align-items: center; gap: 8px; }
+.tb-color-label { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.tb-color input[type="color"] {
+  width: 26px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--bg-3); cursor: pointer;
+}
+.tb-color input[type="color"]::-webkit-color-swatch-wrapper { padding: 2px; }
+.tb-color input[type="color"]::-webkit-color-swatch { border: none; border-radius: 4px; }
 .font-ctl input[type="range"] { width: 110px; accent-color: var(--accent-2); cursor: pointer; }
 .font-ctl .font-val { min-width: 38px; text-align: right; color: var(--text); }
 
@@ -78,7 +89,9 @@ body {
   transition: margin-left .2s ease;
 }
 .library.collapsed { margin-left: -260px; }
-.library-head { padding: 12px 14px; font-weight: 600; color: var(--accent); border-bottom: 1px solid var(--line); }
+.library-head { padding: 10px 14px; font-weight: 600; color: var(--accent); border-bottom: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; }
+.tb-btn-sm { font-size: 11px; padding: 3px 8px; }
+.folder-path { padding: 6px 14px; font-size: 11px; color: var(--muted); word-break: break-all; border-bottom: 1px solid var(--line); max-height: 48px; overflow-y: auto; }
 .paper-list { padding: 8px; }
 .paper-item {
   padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 6px;
@@ -157,7 +170,7 @@ body {
 .float-img {
   position: absolute; pointer-events: auto; border: 2px solid var(--accent);
   border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.6); background: #000;
-  resize: both; overflow: hidden; min-width: 120px; min-height: 80px;
+  overflow: hidden; min-width: 120px; min-height: 80px;
 }
 .float-img img { width: 100%; height: 100%; display: block; object-fit: contain; opacity: 1; }
 .float-img .fi-bar {
@@ -168,9 +181,13 @@ body {
 .float-img .fi-bar .fi-title { color: #fff; font-size: 11px; flex: 1; pointer-events: none; }
 .float-img .fi-bar button { background: none; border: none; color: #fff; cursor: pointer; font-size: 12px; }
 .float-img .fi-bar .fi-save:hover { color: #7ec8ff; }
-.float-img .fi-op { position: absolute; bottom: 6px; right: 6px; width: 70px; opacity: 0; transition: opacity .15s; pointer-events: auto; }
+.float-img .fi-op { position: absolute; bottom: 6px; left: 6px; width: 70px; opacity: 0; transition: opacity .15s; pointer-events: auto; }
 .float-img:hover .fi-op { opacity: 1; }
 .float-img img { pointer-events: none; } /* let mousedown on image propagate to box for dragging */
+.float-img .fi-resize { position: absolute; right: 0; bottom: 0; width: 22px; height: 22px;
+  cursor: nwse-resize; z-index: 4; pointer-events: auto; touch-action: none;
+  background: linear-gradient(135deg, transparent 45%, rgba(255,255,255,.6) 45%, rgba(255,255,255,.6) 55%, transparent 55%, transparent 70%, rgba(255,255,255,.6) 70%, rgba(255,255,255,.6) 80%, transparent 80%);
+}
 
 /* ---- Region-select screenshot overlay ---- */
 .shot-overlay {

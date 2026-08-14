@@ -22,8 +22,12 @@ const state = {
   syncMode: false,
   view: "both",
   fontScale: 1,         // 1 == 100%
+  transBg: localStorage.getItem("pr_transBg") || "#14141c",
+  transFg: localStorage.getItem("pr_transFg") || "#e6e6e6",
   pdfPages: {},         // page number -> .pdf-page wrapper element
 };
+
+const DEFAULT_THEME = { bg: "#14141c", fg: "#e6e6e6" };
 
 // DOM refs
 const $ = (id) => document.getElementById(id);
@@ -69,6 +73,8 @@ window.addEventListener("DOMContentLoaded", () => {
   bindPdfSelection();
   bindPdfClicks();
   bindFontScale();
+  bindTransTheme();
+  bindFolderPicker();
 });
 
 /* ----------------------------------------------------------------------- */
@@ -243,6 +249,70 @@ function bindToolbar() {
   $("btn-notes-close").addEventListener("click", () => notesDrawer.classList.remove("open"));
 }
 
+function bindTransTheme() {
+  const bg = $("trans-bg"), fg = $("trans-fg"), reset = $("btn-theme-reset");
+  bg.value = state.transBg; fg.value = state.transFg;
+  const save = () => {
+    localStorage.setItem("pr_transBg", state.transBg);
+    localStorage.setItem("pr_transFg", state.transFg);
+  };
+  bg.addEventListener("input", () => { state.transBg = bg.value; save(); applyTransTheme(); });
+  fg.addEventListener("input", () => { state.transFg = fg.value; save(); applyTransTheme(); });
+  reset.addEventListener("click", () => {
+    state.transBg = DEFAULT_THEME.bg; state.transFg = DEFAULT_THEME.fg;
+    bg.value = state.transBg; fg.value = state.transFg; save(); applyTransTheme();
+  });
+}
+
+/* ----------------------------------------------------------------------- */
+/* Folder picker — let user choose literature folder                       */
+/* ----------------------------------------------------------------------- */
+function bindFolderPicker() {
+  const btn = $("btn-pick-folder");
+  const picker = $("folder-picker");
+  const pathDisplay = $("folder-path");
+
+  // Show saved folder path on load
+  const savedPath = localStorage.getItem("pr_litFolder") || "";
+  if (savedPath) showPath(savedPath);
+
+  btn.addEventListener("click", () => picker.click());
+
+  picker.addEventListener("change", async () => {
+    if (!picker.files.length) return;
+    // Extract folder from first file's webkitRelativePath: "folder/subfolder/file.html" → "C:/.../folder"
+    const firstPath = picker.files[0].webkitRelativePath;
+    const folderName = firstPath.split("/")[0];
+    // We can't get the real full path from webkitdirectory (browser security),
+    // so we send the folder name to server and it resolves relative to current LIT_ROOT parent.
+    // Actually, better approach: send to server, server returns its resolved path.
+    try {
+      const resp = await fetch("/api/set-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder_name: folderName }),
+      });
+      const data = await resp.json();
+      if (data.ok && data.path) {
+        localStorage.setItem("pr_litFolder", data.path);
+        showPath(data.path);
+        loadPapers(); // reload paper list
+      } else {
+        alert("切换文件夹失败：" + (data.error || "未知错误"));
+      }
+    } catch (e) {
+      alert("请求失败：" + e.message);
+    }
+    // Reset picker so same folder can be re-selected
+    picker.value = "";
+  });
+
+  function showPath(p) {
+    pathDisplay.textContent = "📁 " + p;
+    pathDisplay.title = p;
+  }
+}
+
 /* ----------------------------------------------------------------------- */
 /* Font scale                                                               */
 /* ----------------------------------------------------------------------- */
@@ -300,8 +370,29 @@ iframe.addEventListener("load", () => {
   // translation annotations
   for (const a of state.annotations) if (a.source !== "pdf") applyHtmlAnnotation(a);
   applyFontScale();
+  applyTransTheme();
   bindIframeScrollSync();
 });
+
+// Apply user-chosen background / font colors to the translation iframe.
+function applyTransTheme() {
+  if (!iframeDoc) return;
+  let st = iframeDoc.getElementById("reader-trans-theme");
+  if (!st) {
+    st = iframeDoc.createElement("style");
+    st.id = "reader-trans-theme";
+    iframeDoc.head.appendChild(st);
+  }
+  const bg = state.transBg, fg = state.transFg;
+  st.textContent =
+    /* Override EVERY element's background so dark-themed inner containers (.paper-header, .container, etc.) also change */
+    `html, body { background: ${bg} !important; color: ${fg} !important; }\n` +
+    `body *, body *::before, body *::after { background-color: ${bg} !important; color: ${fg} !important; border-color: ${fg}33 !important; }\n` +
+    /* Preserve images / canvases / iframes from being painted over */
+    `img, canvas, svg, iframe, video { background: transparent !important; }\n` +
+    /* Selection highlight */
+    `::selection { background: ${HL_COLORS.yellow} !important; color: #000 !important; }`;
+}
 
 function injectAnnoStyles() {
   if (iframeDoc.getElementById("anno-style")) return;
@@ -748,31 +839,37 @@ function takeScreenshot() {
   overlay._cleanup = cleanup;
 }
 
-async function captureRegion(x, y, w, h) {
+async function captureRegion(selX, selY, selW, selH) {
   const overlay = $("shot-overlay");
-  overlay.classList.add("hidden"); // hide before capture so the mask isn't included
+  overlay.classList.add("hidden"); // hide mask before capture
+
   try {
-    const rect = viewer.getBoundingClientRect();
-    const canvas = await html2canvas(viewer, {
-      backgroundColor: null,
-      scale: 2,
-      logging: false,
-      useCORS: true,
-    });
-    // map selection (viewport coords) -> canvas pixels, accounting for scroll
-    const scaleX = canvas.width / viewer.scrollWidth;
-    const scaleY = canvas.height / viewer.scrollHeight;
-    const elX = (x - rect.left) + viewer.scrollLeft;
-    const elY = (y - rect.top) + viewer.scrollTop;
-    const cx = Math.max(0, elX * scaleX);
-    const cy = Math.max(0, elY * scaleY);
-    const cw = Math.min(canvas.width - cx, w * scaleX);
-    const ch = Math.min(canvas.height - cy, h * scaleY);
-    if (cw <= 0 || ch <= 0) { alert("所选区域不在阅读区内。"); return; }
-    const cropped = document.createElement("canvas");
-    cropped.width = Math.round(cw); cropped.height = Math.round(ch);
-    cropped.getContext("2d").drawImage(canvas, cx, cy, cw, ch, 0, 0, cw, ch);
-    addFloatImage(cropped.toDataURL("image/png"));
+    const paneTransRect = paneTrans.getBoundingClientRect();
+    const panePdfRect = pdfScroll.getBoundingClientRect();
+    const selRight = selX + selW;
+    const selBottom = selY + selH;
+
+    // Determine which pane(s) the selection overlaps
+    const hitsTrans = !(selX > paneTransRect.right || selRight < paneTransRect.left ||
+                         selY > paneTransRect.bottom || selBottom < paneTransRect.top);
+    const hitsPdf   = !(selX > panePdfRect.right || selRight < panePdfRect.left ||
+                         selY > panePdfRect.bottom || selBottom < panePdfRect.top);
+
+    let finalCanvas;
+
+    if (hitsTrans && !hitsPdf) {
+      // === Selection is ONLY on translation (iframe) side ===
+      finalCanvas = await captureIframeRegion(paneTransRect, selX, selY, selW, selH);
+    } else if (hitsPdf && !hitsTrans) {
+      // === Selection is ONLY on PDF side ===
+      finalCanvas = await capturePdfRegion(panePdfRect, selX, selY, selW, selH);
+    } else {
+      // === Spans both panes — composite ===
+      finalCanvas = await captureCompositeRegion(paneTransRect, panePdfRect, selX, selY, selW, selH);
+    }
+
+    if (!finalCanvas) return;
+    addFloatImage(finalCanvas.toDataURL("image/png"), selX, selY, selW, selH);
   } catch (e) {
     alert("截图失败：" + (e && e.message ? e.message : e));
   } finally {
@@ -780,13 +877,125 @@ async function captureRegion(x, y, w, h) {
   }
 }
 
-function addFloatImage(url) {
+/* ---- Capture translation iframe region (fixes blank iframe issue) ---- */
+async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
+  if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
+
+  // Capture the iframe's document body using html2canvas with the iframe's window
+  const bodyCanvas = await html2canvas(iframeDoc.body, {
+    backgroundColor: null,
+    scale: 2,
+    logging: false,
+    useCORS: true,
+    window: iframe.contentWindow,
+  });
+
+  // Map screen selection coords → iframe-relative coords
+  const scaleX = bodyCanvas.width / iframeDoc.body.scrollWidth;
+  const scaleY = bodyCanvas.height / iframeDoc.body.scrollHeight;
+  const relX = Math.max(0, (selX - paneRect.left) + iframeDoc.documentElement.scrollLeft);
+  const relY = Math.max(0, (selY - paneRect.top) + iframeDoc.documentElement.scrollTop);
+  const cx = relX * scaleX;
+  const cy = relY * scaleY;
+  const cw = Math.min(bodyCanvas.width - cx, selW * scaleX);
+  const ch = Math.min(bodyCanvas.height - cy, selH * scaleY);
+
+  if (cw <= 0 || ch <= 0) return null;
+
+  const cropped = document.createElement("canvas");
+  cropped.width = Math.round(cw); cropped.height = Math.round(ch);
+  cropped.getContext("2d").drawImage(bodyCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
+  return cropped;
+}
+
+/* ---- Capture PDF region: use PDF.js canvases directly (no html2canvas) ---- */
+async function capturePdfRegion(paneRect, selX, selY, selW, selH) {
+  const SCALE = 2; // retina
+  const outW = Math.round(selW * SCALE);
+  const outH = Math.round(selH * SCALE);
+  if (outW <= 0 || outH <= 0) return null;
+
+  const out = document.createElement("canvas");
+  out.width = outW;
+  out.height = outH;
+  const ctx = out.getContext("2d");
+  // Fill with white background (PDF pages are typically white)
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, outW, outH);
+
+  // Find which PDF pages intersect the selection rectangle
+  const pages = pdfScroll.querySelectorAll(".pdf-page");
+  const selRight = selX + selW;
+  const selBottom = selY + selH;
+
+  for (const pageWrap of pages) {
+    const pRect = pageWrap.getBoundingClientRect();
+    // Check intersection with selection
+    if (selX > pRect.right || selRight < pRect.left ||
+        selY > pRect.bottom || selBottom < pRect.top) continue;
+
+    // Get the actual rendered canvas inside this page wrapper
+    const pageCanvas = pageWrap.querySelector("canvas");
+    if (!pageCanvas) continue;
+
+    // Calculate where this page's visible area maps onto the output canvas
+    const srcX = Math.max(0, selX - pRect.left);       // left edge of selection relative to page
+    const srcY = Math.max(0, selY - pRect.top);         // top edge of selection relative to page
+    const srcW = Math.min(pageCanvas.width, pRect.width - srcX, selRight - pRect.left);
+    const srcH = Math.min(pageCanvas.height, pRect.height - srcY, selBottom - pRect.top);
+
+    const dstX = Math.max(0, (pRect.left - selX) * SCALE);
+    const dstY = Math.max(0, (pRect.top - selY) * SCALE);
+
+    ctx.drawImage(
+      pageCanvas,
+      srcX, srcY, srcW, srcH,           // source rect on the PDF page canvas
+      dstX, dstY, srcW * SCALE, srcH * SCALE  // dest rect on output canvas
+    );
+  }
+
+  return out;
+}
+
+/* ---- Composite: selection spans both panes ---- */
+async function captureCompositeRegion(transRect, pdfRect, selX, selY, selW, selH) {
+  const comp = document.createElement("canvas");
+  comp.width = Math.round(selW * 2); comp.height = Math.round(selH * 2); // scale=2
+  const ctx = comp.getContext("2d");
+
+  // Draw translation part (if overlapping)
+  if (iframeDoc && iframeDoc.body) {
+    try {
+      const tCanvas = await captureIframeRegion(transRect, selX, selY, selW, selH);
+      if (tCanvas) {
+        const tx = Math.max(0, (transRect.left - selX) * 2);
+        const ty = Math.max(0, (transRect.top - selY) * 2);
+        ctx.drawImage(tCanvas, tx, ty);
+      }
+    } catch (_) {}
+  }
+
+  // Draw PDF part (if overlapping)
+  try {
+    const pCanvas = await capturePdfRegion(pdfRect, selX, selY, selW, selH);
+    if (pCanvas) {
+      const px = Math.max(0, (pdfRect.left - selX) * 2);
+      const py = Math.max(0, (pdfRect.top - selY) * 2);
+      ctx.drawImage(pCanvas, px, py);
+    }
+  } catch (_) {}
+
+  return comp;
+}
+
+function addFloatImage(url, x, y, w, h) {
   const box = document.createElement("div");
   box.className = "float-img";
-  box.style.left = "60px";
-  box.style.top = "80px";
-  box.style.width = "320px";
-  box.style.height = "220px";
+  // Position at selection location, size matches selection (with small padding for bar)
+  box.style.left = (x || 60) + "px";
+  box.style.top = (y || 80) + "px";
+  box.style.width = Math.max(120, w || 320) + "px";
+  box.style.height = Math.max(80, h || 220) + "px";
 
   const bar = document.createElement("div");
   bar.className = "fi-bar";
@@ -804,6 +1013,12 @@ function addFloatImage(url) {
   op.title = "透明度";
   op.addEventListener("input", () => { img.style.opacity = op.value / 100; });
 
+  // Dedicated resize handle (bottom-right) — implemented in JS so it doesn't
+  // collide with the drag handler or the opacity slider.
+  const resizeHandle = document.createElement("div");
+  resizeHandle.className = "fi-resize";
+  resizeHandle.title = "拖动调整大小";
+
   // Save: download as PNG
   bar.querySelector(".fi-save").addEventListener("click", (e) => {
     e.stopPropagation();
@@ -816,11 +1031,13 @@ function addFloatImage(url) {
   box.appendChild(img);
   box.appendChild(bar);
   box.appendChild(op);
+  box.appendChild(resizeHandle);
   floatLayer.appendChild(box);
 
-  // Drag from anywhere on the box (except buttons / controls)
+  // Drag from anywhere on the box (except buttons / controls / resize handle)
   box.addEventListener("mousedown", (e) => {
-    if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT") return;
+    if (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.classList.contains("fi-resize")) return;
+    if (box._resizing) return;
     e.preventDefault();
     const sx = e.clientX, sy = e.clientY;
     const ox = box.offsetLeft, oy = box.offsetTop;
@@ -829,5 +1046,28 @@ function addFloatImage(url) {
     window.addEventListener("mousemove", mv);
     window.addEventListener("mouseup", up);
   });
+
+  // Resize from the bottom-right handle (pointer capture => works even if the
+  // cursor outruns the small handle; grows AND shrinks from the corner).
+  resizeHandle.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    box._resizing = true;
+    try { resizeHandle.setPointerCapture(e.pointerId); } catch (_) {}
+    const sx = e.clientX, sy = e.clientY;
+    const ow = box.offsetWidth, oh = box.offsetHeight;
+    const mv = (ev) => {
+      box.style.width = Math.max(120, ow + (ev.clientX - sx)) + "px";
+      box.style.height = Math.max(80, oh + (ev.clientY - sy)) + "px";
+    };
+    const up = () => {
+      box._resizing = false;
+      window.removeEventListener("mousemove", mv);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", mv);
+    window.addEventListener("mouseup", up);
+  });
+
   bar.querySelector(".fi-close").addEventListener("click", () => box.remove());
 }
