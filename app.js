@@ -883,32 +883,38 @@ async function captureRegion(selX, selY, selW, selH) {
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
-  // Capture the iframe's document body. html2canvas renders at scale S of the
-  // *natural* (un-zoomed) layout, so the output is naturalWidth * S pixels.
-  const S = 2; // html2canvas scale (retina)
   const z = state.fontScale || 1; // CSS zoom applied to the iframe (font slider)
+
+  // html2canvas lays out elements via getBoundingClientRect(), which ALREADY
+  // includes the CSS `zoom`. So the rendered canvas is in the *zoomed* pixel
+  // space, NOT the un-zoomed `scale` space. We therefore derive the true
+  // px-per-natural-content ratio empirically from the actual canvas rather
+  // than assuming it equals `scale`. This keeps the crop exact at any zoom.
   const bodyCanvas = await html2canvas(iframeDoc.body, {
     backgroundColor: null,
-    scale: S,
+    scale: 2,
     logging: false,
     useCORS: true,
     window: iframe.contentWindow,
   });
   if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  const scrollLeft = iframeDoc.documentElement.scrollLeft || 0;
-  const scrollTop = iframeDoc.documentElement.scrollTop || 0;
+  const natW = iframeDoc.body.scrollWidth || bodyCanvas.width / 2;
+  const natH = iframeDoc.body.scrollHeight || bodyCanvas.height / 2;
+  const rx = bodyCanvas.width / natW; // canvas px per natural px (≈ z*2 when zoomed)
+  const ry = bodyCanvas.height / natH;
 
-  // Screen selection (which is already zoom-scaled) → natural content pixels:
-  //   naturalX = (screenX - paneLeft) / z  +  scrollLeft
-  // then → canvas pixels via * S.
+  const scrollLeft = iframeDoc.documentElement.scrollLeft || iframeDoc.body.scrollLeft || 0;
+  const scrollTop  = iframeDoc.documentElement.scrollTop  || iframeDoc.body.scrollTop  || 0;
+
+  // Screen selection (already zoom-scaled) → natural content px, then → canvas px.
   const natX = (selX - paneRect.left) / z + scrollLeft;
   const natY = (selY - paneRect.top) / z + scrollTop;
-  const natW = selW / z;
-  const natH = selH / z;
+  const natWsel = selW / z;
+  const natHsel = selH / z;
 
-  let cx = natX * S, cy = natY * S;
-  let cw = natW * S, ch = natH * S;
+  let cx = natX * rx, cy = natY * ry;
+  let cw = natWsel * rx, ch = natHsel * ry;
 
   // Clamp to the captured canvas (also handles selections that start off-canvas)
   if (cx < 0) { cw += cx; cx = 0; }
