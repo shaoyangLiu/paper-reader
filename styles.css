@@ -190,7 +190,7 @@ body {
 .float-layer { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
 .float-img {
   position: absolute; pointer-events: auto; border: 2px solid var(--accent);
-  border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.6); background: #000;
+  border-radius: 6px; box-shadow: 0 6px 24px rgba(0,0,0,.6); background: transparent;
   overflow: hidden; min-width: 120px; min-height: 80px;
 }
 .float-img img { width: 100%; height: 100%; display: block; object-fit: contain; opacity: 1; }
