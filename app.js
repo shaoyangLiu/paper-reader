@@ -1006,88 +1006,55 @@ async function captureRegion(selX, selY, selW, selH) {
   }
 }
 
-/* ---- Capture translation iframe region (marker-calibrated crop) ---- */
+/* ---- Capture translation iframe region (zoom-correct crop) ---- */
+// KEY FACT: html2canvas 1.4.1 has ZERO zoom handling — it ignores CSS `zoom`
+// and renders the body at its UN-ZOOMED logical layout, multiplied only by the
+// `scale` option. So a body-logical pixel maps to `scale` canvas pixels, no
+// matter what zoom is set. We convert the user's on-screen selection (parent
+// viewport coords) back to body-logical coords with getBoundingClientRect,
+// which is fully scroll-independent.
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
   const root = iframeDoc.documentElement;
-  const z = parseFloat(root.style.zoom) || 1;
+  const z = parseFloat(root.style.zoom) || 1; // same value applied by the zoom slider
+  const S = 2;                                // MUST match html2canvas `scale` below
 
-  // Read scroll position
-  const sl = root.scrollLeft || iframeDoc.body.scrollLeft || 0;
-  const st = root.scrollTop  || iframeDoc.body.scrollTop  || 0;
+  // Body box, measured in the iframe's own viewport (zoomed screen px).
+  const bodyRect = iframeDoc.body.getBoundingClientRect();
+  // Translate into PARENT-viewport coords (selX/selY are parent clientX/Y).
+  const bodyLeftParent = paneRect.left + bodyRect.left;
+  const bodyTopParent  = paneRect.top  + bodyRect.top;
 
-  // Convert screen selection to approximate document coordinates.
-  // Any systematic zoom error cancels out: both corners share the same error,
-  // and we crop BETWEEN the two marker positions.
-  function screenToDoc(sx, sy) {
-    return { x: sl + (sx - paneRect.left) / z, y: st + (sy - paneRect.top) / z };
-  }
-  const docTL = screenToDoc(selX, selY);
-  const docBR = screenToDoc(selX + selW, selY + selH);
-
-  // --- Inject invisible calibration markers into the iframe body ---
-  // These markers go through html2canvas's exact same layout pipeline as content,
-  // so their final positions in the cloned document reveal the true coordinate
-  // mapping regardless of how html2canvas handles CSS zoom.
-  const MK = "_mk_c"; // class prefix for calibration markers
-  const baseStyle = "position:absolute;width:1px;height:1px;overflow:hidden;background:transparent;z-index:-9999;pointer-events:none;border:none;margin:0;padding:0;";
-
-  const mSel   = iframeDoc.createElement("div");
-  mSel.className   = MK + " sel";
-  mSel.style.cssText = baseStyle + "left:" + docTL.x + "px;top:" + docTL.y + "px;";
-
-  const mSelBR = iframeDoc.createElement("div");
-  mSelBR.className = MK + " selbr";
-  mSelBR.style.cssText = baseStyle + "left:" + docBR.x + "px;top:" + docBR.y + "px;";
-
-  iframeDoc.body.appendChild(mSel);
-  iframeDoc.body.appendChild(mSelBR);
-
-  // Calibration data — populated by onclone callback
-  var cal = { sel: null, selbr: null };
+  // Screen px from body's top-left  ->  body-logical px (divide by zoom).
+  const toLogical = (cx, cy) => ({
+    x: (cx - bodyLeftParent) / z,
+    y: (cy - bodyTopParent)  / z,
+  });
+  const tl = toLogical(selX, selY);
+  const br = toLogical(selX + selW, selY + selH);
 
   let bodyCanvas;
   try {
     bodyCanvas = await html2canvas(iframeDoc.body, {
       backgroundColor: "#ffffff",
-      scale: 2,
+      scale: S,
       logging: false,
       useCORS: true,
-      window: iframe.contentWindow,
-      onclone: function(clonedDoc) {
-        // In html2canvas's cloned document, read marker positions.
-        // offsetLeft/offsetTop are in pre-scale layout px; multiply by 2 for canvas px.
-        var s  = clonedDoc.querySelector("." + MK + ".sel");
-        var sb = clonedDoc.querySelector("." + MK + ".selbr");
-        if (s)  cal.sel   = { x: s.offsetLeft * 2, y: s.offsetTop  * 2 };
-        if (sb) cal.selbr = { x: sb.offsetLeft * 2, y: sb.offsetTop * 2 };
-      },
     });
-  } finally {
-    // Always remove markers from live DOM
-    mSel.remove();
-    mSelBR.remove();
+  } catch (e) {
+    console.error("[screenshot] html2canvas failed", e);
+    return null;
   }
-
   if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  // --- Calibrated crop using marker positions ---
-  if (cal.sel && cal.selbr) {
-    var cx = Math.round(cal.sel.x), cy = Math.round(cal.sel.y);
-    var cw = Math.round(cal.selbr.x - cal.sel.x), ch = Math.round(cal.selbr.y - cal.sel.y);
-  } else {
-    // Fallback: markers not found (shouldn't happen), use empirical ratio
-    console.warn("[screenshot] calibration markers missing — using fallback");
-    var rx = bodyCanvas.width / (iframeDoc.body.scrollWidth || bodyCanvas.width / 2);
-    var ry = bodyCanvas.height / (iframeDoc.body.scrollHeight || bodyCanvas.height / 2);
-    var cx = Math.max(0, Math.round(docTL.x * rx)), cy = Math.max(0, Math.round(docTL.y * ry));
-    var cw = Math.min(Math.round((docBR.x - docTL.x) * rx), bodyCanvas.width - cx);
-    var ch = Math.min(Math.round((docBR.y - docTL.y) * ry), bodyCanvas.height - cy);
-  }
+  // Crop rectangle in canvas pixels (logical * scale).
+  let cx = Math.round(tl.x * S);
+  let cy = Math.round(tl.y * S);
+  let cw = Math.round((br.x - tl.x) * S);
+  let ch = Math.round((br.y - tl.y) * S);
 
-  if (cw <= 0 || ch <= 0) return null;
-  // Clamp to canvas bounds
+  // Clamp to canvas bounds.
   if (cx < 0) { cw += cx; cx = 0; }
   if (cy < 0) { ch += cy; cy = 0; }
   if (cx + cw > bodyCanvas.width)  cw = bodyCanvas.width  - cx;
