@@ -200,6 +200,7 @@ class Handler(BaseHTTPRequestHandler):
         folder = data.get("folder", "")
         file = data.get("html", data.get("file", ""))
         annotations = data.get("annotations", [])
+        bookmarks = data.get("bookmarks", [])
         if not folder or not file:
             self._send(400, json.dumps({"error": "missing folder/file"}))
             return
@@ -211,7 +212,7 @@ class Handler(BaseHTTPRequestHandler):
         tmp = fp + ".tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"annotations": annotations}, fh, ensure_ascii=False, indent=2)
+                json.dump({"annotations": annotations, "bookmarks": bookmarks}, fh, ensure_ascii=False, indent=2)
             shutil.move(tmp, fp)
         except OSError as e:
             self._send(500, json.dumps({"error": str(e)}))

@@ -18,6 +18,7 @@ const state = {
   papers: [],
   current: null,        // {folder, html, pdf}
   annotations: [],      // mixed: {source:'html'|'pdf', ...}
+  bookmarks: [],        // reading-position bookmarks for current paper
   annoMode: false,
   syncMode: false,
   view: "both",
@@ -48,6 +49,8 @@ const noteText = $("note-text");
 const notesDrawer = $("notes-drawer");
 const notesList = $("notes-list");
 const floatLayer = $("float-layer");
+const bmDrawer = $("bm-drawer");
+const bmList = $("bm-list");
 
 const API = {
   papers: "/api/papers",
@@ -75,6 +78,7 @@ window.addEventListener("DOMContentLoaded", () => {
   bindFontScale();
   bindTransTheme();
   bindFolderPicker();
+  bindBookmarks();
 });
 
 /* ----------------------------------------------------------------------- */
@@ -125,6 +129,7 @@ async function openPaper(p) {
       const r = await fetch(API.annoGet(p.folder, state.current.html));
       const j = await r.json();
       state.annotations = j.annotations || [];
+      state.bookmarks = j.bookmarks || [];
     } catch (e) { state.annotations = []; }
   }
 
@@ -151,6 +156,7 @@ async function openPaper(p) {
   applyView();
   applyFontScale();
   renderNotes();
+  renderBookmarks();
 }
 
 /* ----------------------------------------------------------------------- */
@@ -247,6 +253,9 @@ function bindToolbar() {
   $("btn-shot").addEventListener("click", takeScreenshot);
   $("btn-notes").addEventListener("click", () => notesDrawer.classList.toggle("open"));
   $("btn-notes-close").addEventListener("click", () => notesDrawer.classList.remove("open"));
+  $("btn-bookmarks").addEventListener("click", () => bmDrawer.classList.toggle("open"));
+  $("bm-close").addEventListener("click", () => bmDrawer.classList.remove("open"));
+  $("bm-add").addEventListener("click", addBookmark);
 }
 
 function bindTransTheme() {
@@ -757,6 +766,7 @@ function saveAnnotations() {
           folder: state.current.folder,
           html: state.current.html,
           annotations: state.annotations,
+          bookmarks: state.bookmarks,
         }),
       });
     } catch (e) { /* ignore */ }
@@ -794,6 +804,117 @@ pdfScroll.addEventListener("scroll", () => {
   setIframeRatio(ratio(pdfScroll));
   setTimeout(() => (syncing = false), 60);
 });
+
+/* ----------------------------------------------------------------------- */
+/* Reading-position bookmarks                                              */
+/* ----------------------------------------------------------------------- */
+function bindBookmarks() {
+  // events bound in bindToolbar (btn-bookmarks / bm-close / bm-add)
+}
+
+// Best-effort label: the nearest heading above the current translation scroll.
+function currentHeadingLabel() {
+  if (!iframeDoc) return "";
+  const se = iframeDoc.scrollingElement || iframeDoc.documentElement;
+  const topNat = se.scrollTop; // natural (unzoomed) scroll offset
+  let label = "";
+  const heads = iframeDoc.querySelectorAll("h1,h2,h3,h4,h5,h6");
+  for (const h of heads) {
+    // rect.top is in zoomed screen px; convert to natural by dividing by zoom
+    const z = state.fontScale || 1;
+    const natTop = h.getBoundingClientRect().top / z + topNat;
+    if (natTop <= topNat + 40) label = h.textContent.trim();
+    else break;
+  }
+  return label;
+}
+
+function addBookmark() {
+  if (!state.current || !state.current.html) { alert("请先打开一篇论文。"); return; }
+  const se = iframeDoc && (iframeDoc.scrollingElement || iframeDoc.documentElement);
+  const bm = {
+    id: uid(),
+    view: state.view,
+    fontScale: state.fontScale,
+    transScroll: se ? se.scrollTop : 0,
+    pdfScroll: pdfScroll.scrollTop || 0,
+    label: currentHeadingLabel() || ("书签 " + (state.bookmarks.length + 1)),
+    created: Date.now(),
+  };
+  state.bookmarks.push(bm);
+  saveAnnotations();
+  renderBookmarks();
+  bmDrawer.classList.add("open");
+}
+
+function renderBookmarks() {
+  if (!state.bookmarks.length) {
+    bmList.innerHTML = `<div class="hint">暂无书签。点「＋ 添加当前位置」保存阅读进度，下次一键跳回。</div>`;
+    return;
+  }
+  // newest first
+  const sorted = state.bookmarks.slice().sort((a, b) => b.created - a.created);
+  bmList.innerHTML = "";
+  for (const bm of sorted) {
+    const viewName = bm.view === "translation" ? "翻译" : bm.view === "original" ? "原文" : "双栏";
+    const t = new Date(bm.created);
+    const ts = `${t.getMonth() + 1}/${t.getDate()} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+    const div = document.createElement("div");
+    div.className = "bm-item";
+    div.innerHTML = `<div class="bm-label">🔖 ${esc(bm.label)}</div>
+      <div class="bm-meta">${viewName} · ${Math.round((bm.fontScale || 1) * 100)}% · ${ts}</div>
+      <div class="bm-actions">
+        <button class="bm-go" data-id="${bm.id}">跳转</button>
+        <button class="bm-ren" data-id="${bm.id}">重命名</button>
+        <button class="bm-del" data-id="${bm.id}">删除</button>
+      </div>`;
+    div.addEventListener("click", (e) => {
+      if (e.target.classList.contains("bm-go")) { applyBookmark(bm.id); return; }
+      if (e.target.classList.contains("bm-del")) { deleteBookmark(bm.id); return; }
+      if (e.target.classList.contains("bm-ren")) { renameBookmark(bm.id); return; }
+    });
+    bmList.appendChild(div);
+  }
+}
+
+function applyBookmark(id) {
+  const bm = state.bookmarks.find((x) => x.id === id);
+  if (!bm) return;
+  // 1) restore view
+  state.view = bm.view || "both";
+  applyView();
+  // 2) restore zoom
+  const s = bm.fontScale || 1;
+  state.fontScale = s;
+  const slider = $("font-scale");
+  if (slider) { slider.value = Math.round(s * 100); $("font-val").textContent = Math.round(s * 100) + "%"; }
+  applyFontScale();
+  // 3) restore scroll positions (after view/zoom applied)
+  const se = iframeDoc && (iframeDoc.scrollingElement || iframeDoc.documentElement);
+  if (se && bm.view !== "original") {
+    // defer one frame so layout settles after view switch
+    requestAnimationFrame(() => { se.scrollTop = bm.transScroll || 0; });
+  }
+  if (bm.view !== "translation") {
+    pdfScroll.scrollTop = bm.pdfScroll || 0;
+  }
+}
+
+function renameBookmark(id) {
+  const bm = state.bookmarks.find((x) => x.id === id);
+  if (!bm) return;
+  const name = prompt("书签名称：", bm.label);
+  if (name === null) return;
+  bm.label = name.trim() || bm.label;
+  saveAnnotations();
+  renderBookmarks();
+}
+
+function deleteBookmark(id) {
+  state.bookmarks = state.bookmarks.filter((x) => x.id !== id);
+  saveAnnotations();
+  renderBookmarks();
+}
 
 /* ----------------------------------------------------------------------- */
 /* Screenshots (region-select + floating window)                          */

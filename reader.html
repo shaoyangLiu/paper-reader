@@ -30,6 +30,7 @@
     <button id="btn-sync" class="tb-btn off" title="开启/关闭双栏滚动同步">🔗 同步：关</button>
     <button id="btn-shot" class="tb-btn" title="框选区域截图并悬浮">📸 截图</button>
     <button id="btn-notes" class="tb-btn" title="笔记列表">📝 笔记</button>
+    <button id="btn-bookmarks" class="tb-btn" title="阅读位置书签">🔖 书签</button>
     <div class="tb-sep"></div>
     <div class="tb-color-group">
       <label class="tb-color" title="翻译界面背景色"><span class="tb-color-label">背景</span>🎨<input id="trans-bg" type="color" value="#14141c"></label>
@@ -83,6 +84,16 @@
   <aside id="notes-drawer" class="notes-drawer">
     <div class="notes-head">笔记 <button id="btn-notes-close" class="x">×</button></div>
     <div id="notes-list" class="notes-list"><div class="hint">暂无笔记</div></div>
+  </aside>
+
+  <!-- ===== Bookmarks drawer ===== -->
+  <aside id="bm-drawer" class="bm-drawer">
+    <div class="bm-head">
+      <span>🔖 书签</span>
+      <button id="bm-add" class="tb-btn tb-btn-sm">＋ 添加当前位置</button>
+      <button id="bm-close" class="x">×</button>
+    </div>
+    <div id="bm-list" class="bm-list"><div class="hint">暂无书签</div></div>
   </aside>
 
   <!-- ===== Floating screenshot layer ===== -->

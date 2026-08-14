@@ -165,6 +165,27 @@ body {
 .note-item .del { float: right; color: var(--danger); cursor: pointer; font-size: 12px; }
 .note-item .ntag { display: inline-block; font-size: 11px; color: var(--accent-2); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; margin-bottom: 6px; }
 
+/* ---- Bookmarks drawer ---- */
+.bm-drawer {
+  position: fixed; top: var(--topbar-h); right: 0; width: 320px; height: calc(100vh - var(--topbar-h));
+  background: var(--bg-2); border-left: 1px solid var(--line); z-index: 26;
+  transform: translateX(100%); transition: transform .2s ease; display: flex; flex-direction: column;
+}
+.bm-drawer.open { transform: translateX(0); }
+.bm-head { padding: 10px 14px; font-weight: 600; color: var(--accent); border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 8px; }
+.bm-head .x { background: none; border: none; color: var(--muted); font-size: 18px; cursor: pointer; margin-left: auto; }
+.bm-list { overflow-y: auto; padding: 10px; }
+.bm-item { background: var(--bg-3); border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 8px; cursor: default; }
+.bm-item:hover { border-color: var(--accent); }
+.bm-item .bm-label { font-size: 13px; line-height: 1.5; word-break: break-word; }
+.bm-item .bm-meta { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.bm-item .bm-actions { display: flex; gap: 6px; margin-top: 8px; }
+.bm-item .bm-go { background: var(--accent-2); color: #fff; border: none; border-radius: 6px; padding: 3px 12px; cursor: pointer; font-size: 12px; }
+.bm-item .bm-go:hover { filter: brightness(1.1); }
+.bm-item .bm-ren, .bm-item .bm-del { background: none; border: 1px solid var(--line); border-radius: 6px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+.bm-item .bm-ren { color: var(--muted); }
+.bm-item .bm-del { color: var(--danger); border-color: var(--danger); }
+
 /* ---- Floating screenshots ---- */
 .float-layer { position: fixed; inset: 0; pointer-events: none; z-index: 40; }
 .float-img {
