@@ -1006,45 +1006,46 @@ async function captureRegion(selX, selY, selW, selH) {
   }
 }
 
-/* ---- Capture translation iframe region (zoom-nuclear: reset→capture→restore) ---- */
+/* ---- Capture translation iframe region (marker-calibrated crop) ---- */
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
   const root = iframeDoc.documentElement;
   const z = parseFloat(root.style.zoom) || 1;
 
-  // --- Save current state ---
-  const oldZoom = root.style.zoom;
-  const oldScrollLeft = root.scrollLeft || iframeDoc.body.scrollLeft || 0;
-  const oldScrollTop  = root.scrollTop  || iframeDoc.body.scrollTop  || 0;
+  // Read scroll position
+  const sl = root.scrollLeft || iframeDoc.body.scrollLeft || 0;
+  const st = root.scrollTop  || iframeDoc.body.scrollTop  || 0;
 
-  // --- Convert screen selection to NATURAL (un-zoomed) content coordinates ---
-  // paneRect is the iframe's on-screen rect; selX/selY are on-screen (already zoomed).
-  // Divide by z to get natural-pixel offsets within the iframe viewport.
-  const natVx = (selX - paneRect.left) / z;   // selection x in natural iframe-vp px
-  const natVy = (selY - paneRect.top) / z;     // selection y in natural iframe-vp px
-  const natVw = selW / z;
-  const natVh = selH / z;
-  // Scroll is also in zoomed px → divide by z for natural
-  const natSl = oldScrollLeft / z;
-  const natSt = oldScrollTop / z;
-  // Absolute position of the selection in natural content space
-  const natCx = natSl + natVx;
-  const natCy = natSt + natVy;
+  // Convert screen selection to approximate document coordinates.
+  // Any systematic zoom error cancels out: both corners share the same error,
+  // and we crop BETWEEN the two marker positions.
+  function screenToDoc(sx, sy) {
+    return { x: sl + (sx - paneRect.left) / z, y: st + (sy - paneRect.top) / z };
+  }
+  const docTL = screenToDoc(selX, selY);
+  const docBR = screenToDoc(selX + selW, selY + selH);
 
-  // --- Nuclear: set zoom=1 so html2canvas behaviour is 100% predictable ---
-  // Cover with invisible overlay to prevent the user seeing the layout shift.
-  const overlay = $("shot-overlay");
-  overlay.classList.remove("hidden");
-  overlay.style.background = "rgba(0,0,0,0.4)";  // dimmed mask
+  // --- Inject invisible calibration markers into the iframe body ---
+  // These markers go through html2canvas's exact same layout pipeline as content,
+  // so their final positions in the cloned document reveal the true coordinate
+  // mapping regardless of how html2canvas handles CSS zoom.
+  const MK = "_mk_c"; // class prefix for calibration markers
+  const baseStyle = "position:absolute;width:1px;height:1px;overflow:hidden;background:transparent;z-index:-9999;pointer-events:none;border:none;margin:0;padding:0;";
 
-  root.style.zoom = "1";
-  // Scroll to roughly where the selection is (so it's within the rendered area)
-  root.scrollLeft = Math.max(0, Math.round(natCx - 80));
-  root.scrollTop  = Math.max(0, Math.round(natCy - 80));
+  const mSel   = iframeDoc.createElement("div");
+  mSel.className   = MK + " sel";
+  mSel.style.cssText = baseStyle + "left:" + docTL.x + "px;top:" + docTL.y + "px;";
 
-  // Wait for browser to re-layout after zoom change
-  await new Promise(cb => requestAnimationFrame(() => requestAnimationFrame(cb)));
+  const mSelBR = iframeDoc.createElement("div");
+  mSelBR.className = MK + " selbr";
+  mSelBR.style.cssText = baseStyle + "left:" + docBR.x + "px;top:" + docBR.y + "px;";
+
+  iframeDoc.body.appendChild(mSel);
+  iframeDoc.body.appendChild(mSelBR);
+
+  // Calibration data — populated by onclone callback
+  var cal = { sel: null, selbr: null };
 
   let bodyCanvas;
   try {
@@ -1054,25 +1055,38 @@ async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
       logging: false,
       useCORS: true,
       window: iframe.contentWindow,
+      onclone: function(clonedDoc) {
+        // In html2canvas's cloned document, read marker positions.
+        // offsetLeft/offsetTop are in pre-scale layout px; multiply by 2 for canvas px.
+        var s  = clonedDoc.querySelector("." + MK + ".sel");
+        var sb = clonedDoc.querySelector("." + MK + ".selbr");
+        if (s)  cal.sel   = { x: s.offsetLeft * 2, y: s.offsetTop  * 2 };
+        if (sb) cal.selbr = { x: sb.offsetLeft * 2, y: sb.offsetTop * 2 };
+      },
     });
   } finally {
-    // --- Restore state IMMEDIATELY ---
-    root.style.zoom = oldZoom;
-    root.scrollLeft = oldScrollLeft;
-    root.scrollTop  = oldScrollTop;
-    overlay.classList.add("hidden");
-    overlay.style.background = "";
+    // Always remove markers from live DOM
+    mSel.remove();
+    mSelBR.remove();
   }
 
   if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  // At zoom=1 + html2canvas scale=2:
-  //   canvas.width == body.scrollWidth * 2  (natural content px * 2)
-  // Selection is in natural content px → multiply by 2 for canvas pixel coords.
-  const S = 2;
-  let cx = natCx * S, cy = natCy * S;
-  let cw = natVw * S, ch = natVh * S;
+  // --- Calibrated crop using marker positions ---
+  if (cal.sel && cal.selbr) {
+    var cx = Math.round(cal.sel.x), cy = Math.round(cal.sel.y);
+    var cw = Math.round(cal.selbr.x - cal.sel.x), ch = Math.round(cal.selbr.y - cal.sel.y);
+  } else {
+    // Fallback: markers not found (shouldn't happen), use empirical ratio
+    console.warn("[screenshot] calibration markers missing — using fallback");
+    var rx = bodyCanvas.width / (iframeDoc.body.scrollWidth || bodyCanvas.width / 2);
+    var ry = bodyCanvas.height / (iframeDoc.body.scrollHeight || bodyCanvas.height / 2);
+    var cx = Math.max(0, Math.round(docTL.x * rx)), cy = Math.max(0, Math.round(docTL.y * ry));
+    var cw = Math.min(Math.round((docBR.x - docTL.x) * rx), bodyCanvas.width - cx);
+    var ch = Math.min(Math.round((docBR.y - docTL.y) * ry), bodyCanvas.height - cy);
+  }
 
+  if (cw <= 0 || ch <= 0) return null;
   // Clamp to canvas bounds
   if (cx < 0) { cw += cx; cx = 0; }
   if (cy < 0) { ch += cy; cy = 0; }
@@ -1081,7 +1095,7 @@ async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (cw <= 0 || ch <= 0) return null;
 
   const cropped = document.createElement("canvas");
-  cropped.width = Math.round(cw); cropped.height = Math.round(ch);
+  cropped.width = cw; cropped.height = ch;
   cropped.getContext("2d").drawImage(bodyCanvas, cx, cy, cw, ch, 0, 0, cw, ch);
   return cropped;
 }
