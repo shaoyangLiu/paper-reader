@@ -1006,53 +1006,77 @@ async function captureRegion(selX, selY, selW, selH) {
   }
 }
 
-/* ---- Capture translation iframe region (zoom-independent mapping) ---- */
+/* ---- Capture translation iframe region (zoom-nuclear: reset→capture→restore) ---- */
 async function captureIframeRegion(paneRect, selX, selY, selW, selH) {
   if (!iframeDoc || !iframeDoc.body) { alert("翻译内容未加载。"); return null; }
 
-  // html2canvas's handling of CSS `zoom` is version-dependent: it may or may
-  // not bake the zoom into the output pixels. We must NOT assume a fixed
-  // ratio. Instead we derive the mapping from the ACTUAL rendered canvas.
-  //
-  // Everything below is in the iframe's own CSS-pixel space, which already
-  // includes the zoom (z). In particular:
-  //   - the on-screen selection (selX - paneRect.left) is in *zoomed* px
-  //   - iframeDoc.body.scrollWidth / scrollHeight are in *zoomed* px
-  //   - documentElement.scrollLeft / scrollTop are in *zoomed* px
-  // The ratio `canvas.width / body.scrollWidth` therefore equals canvas px
-  // per zoomed content px, and the zoom factor cancels algebraically for BOTH
-  // html2canvas behaviors — so the crop is exact at any zoom (and is identical
-  // to the old code at z = 1, where it already worked).
-  const bodyCanvas = await html2canvas(iframeDoc.body, {
-    backgroundColor: null,
-    scale: 2,
-    logging: false,
-    useCORS: true,
-    window: iframe.contentWindow,
-  });
+  const root = iframeDoc.documentElement;
+  const z = parseFloat(root.style.zoom) || 1;
+
+  // --- Save current state ---
+  const oldZoom = root.style.zoom;
+  const oldScrollLeft = root.scrollLeft || iframeDoc.body.scrollLeft || 0;
+  const oldScrollTop  = root.scrollTop  || iframeDoc.body.scrollTop  || 0;
+
+  // --- Convert screen selection to NATURAL (un-zoomed) content coordinates ---
+  // paneRect is the iframe's on-screen rect; selX/selY are on-screen (already zoomed).
+  // Divide by z to get natural-pixel offsets within the iframe viewport.
+  const natVx = (selX - paneRect.left) / z;   // selection x in natural iframe-vp px
+  const natVy = (selY - paneRect.top) / z;     // selection y in natural iframe-vp px
+  const natVw = selW / z;
+  const natVh = selH / z;
+  // Scroll is also in zoomed px → divide by z for natural
+  const natSl = oldScrollLeft / z;
+  const natSt = oldScrollTop / z;
+  // Absolute position of the selection in natural content space
+  const natCx = natSl + natVx;
+  const natCy = natSt + natVy;
+
+  // --- Nuclear: set zoom=1 so html2canvas behaviour is 100% predictable ---
+  // Cover with invisible overlay to prevent the user seeing the layout shift.
+  const overlay = $("shot-overlay");
+  overlay.classList.remove("hidden");
+  overlay.style.background = "rgba(0,0,0,0.4)";  // dimmed mask
+
+  root.style.zoom = "1";
+  // Scroll to roughly where the selection is (so it's within the rendered area)
+  root.scrollLeft = Math.max(0, Math.round(natCx - 80));
+  root.scrollTop  = Math.max(0, Math.round(natCy - 80));
+
+  // Wait for browser to re-layout after zoom change
+  await new Promise(cb => requestAnimationFrame(() => requestAnimationFrame(cb)));
+
+  let bodyCanvas;
+  try {
+    bodyCanvas = await html2canvas(iframeDoc.body, {
+      backgroundColor: "#ffffff",
+      scale: 2,
+      logging: false,
+      useCORS: true,
+      window: iframe.contentWindow,
+    });
+  } finally {
+    // --- Restore state IMMEDIATELY ---
+    root.style.zoom = oldZoom;
+    root.scrollLeft = oldScrollLeft;
+    root.scrollTop  = oldScrollTop;
+    overlay.classList.add("hidden");
+    overlay.style.background = "";
+  }
+
   if (!bodyCanvas.width || !bodyCanvas.height) return null;
 
-  const rx = bodyCanvas.width / (iframeDoc.body.scrollWidth  || bodyCanvas.width  / 2);
-  const ry = bodyCanvas.height / (iframeDoc.body.scrollHeight || bodyCanvas.height / 2);
+  // At zoom=1 + html2canvas scale=2:
+  //   canvas.width == body.scrollWidth * 2  (natural content px * 2)
+  // Selection is in natural content px → multiply by 2 for canvas pixel coords.
+  const S = 2;
+  let cx = natCx * S, cy = natCy * S;
+  let cw = natVw * S, ch = natVh * S;
 
-  const scrollLeft = iframeDoc.documentElement.scrollLeft || iframeDoc.body.scrollLeft || 0;
-  const scrollTop  = iframeDoc.documentElement.scrollTop  || iframeDoc.body.scrollTop  || 0;
-
-  // Screen selection (zoomed px) → canvas px. No `/z` here: scrollLeft, the
-  // selection offset and body.scrollWidth are ALL already in the same zoomed
-  // space, and the ratio carries the rest.
-  const vx = selX - paneRect.left;  // x within iframe viewport (zoomed)
-  const vy = selY - paneRect.top;   // y within iframe viewport (zoomed)
-
-  let cx = (scrollLeft + vx) * rx;
-  let cy = (scrollTop + vy) * ry;
-  let cw = selW * rx;
-  let ch = selH * ry;
-
-  // Clamp to the captured canvas (also handles selections that start off-canvas)
+  // Clamp to canvas bounds
   if (cx < 0) { cw += cx; cx = 0; }
   if (cy < 0) { ch += cy; cy = 0; }
-  if (cx + cw > bodyCanvas.width) cw = bodyCanvas.width - cx;
+  if (cx + cw > bodyCanvas.width)  cw = bodyCanvas.width  - cx;
   if (cy + ch > bodyCanvas.height) ch = bodyCanvas.height - cy;
   if (cw <= 0 || ch <= 0) return null;
 
